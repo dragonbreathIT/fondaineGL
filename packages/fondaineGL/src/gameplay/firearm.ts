@@ -174,7 +174,7 @@ export class Firearm extends Behaviour {
   reloadPhase: ReloadPhase | null = null;
   phaseT = 0;
   /** Magazine choreography (oAxis tuning): eject speed, how far down the vest is (where the fresh magazine comes from), when it seats, fumble odds. */
-  readonly magAnim = { ejectSpeed: 1.2, insertDistance: 0.14, vestDistance: 0.42, seatFraction: 0.72, fumbleChance: 0.25, fumbleExtra: 0.38, cameraDipDeg: 3.5 };
+  readonly magAnim = { ejectSpeed: 1.2, insertDistance: 0.14, vestDistance: 0.42, seatFraction: 0.72, fumbleChance: 0.25, fumbleExtra: 0.38, cameraDipDeg: 7 };
   /** Set per reload: this one gets botched on the first insertion attempt (the magazine catches the magwell lip). */
   fumbling = false;
 
@@ -289,8 +289,8 @@ export class Firearm extends Behaviour {
     // pistol: brought in to the chest, muzzle up ~55°, canted out so the magwell faces the eyes and the fresh
     // magazine rises into view; rifle: pulled in and rolled ~40° to the left so the magwell shows past the receiver
     this.spec.reloadPose ??= this.spec.action && this.spec.eyeRelief > 0.3
-      ? { lift: 0.02, back: 0.13, pitch: 0.95, yaw: 0.2, roll: 0.5, chargeRoll: 0.3 }
-      : { lift: 0.0, back: 0.08, pitch: 0.3, yaw: 0.38, roll: 0.7, chargeRoll: 0.15 };
+      ? { lift: 0.13, back: 0.08, pitch: 0.8, yaw: 0.2, roll: 0.45, chargeRoll: 0.3 }
+      : { lift: 0.06, back: 0.06, pitch: 0.3, yaw: 0.38, roll: 0.7, chargeRoll: 0.15 };
     const rp = this.spec.reloadPose as unknown as Record<string, number>;
     ta.number(ga, rp, 'lift', { label: 'Reload pose: lift', min: -0.1, max: 0.2, step: 0.001, unit: 'm' })
       .number(ga, rp, 'back', { label: 'Reload pose: pull back', min: 0, max: 0.25, step: 0.001, unit: 'm' })
