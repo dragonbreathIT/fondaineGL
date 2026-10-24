@@ -2,3 +2,4 @@ node_modules/
 crates/target/
 dist/**/*.map
 dist/assets/
+captures/

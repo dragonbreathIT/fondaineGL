@@ -459,7 +459,7 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
       triggerTravelM: 0.003,
       selector: { pivot: [-(AR.lowerHW + 0.0016), AR.seam - 0.0092, 0.03], axis: [1, 0, 0], angles: { safe: 0, semi: Math.PI / 2, auto: Math.PI } },
       // racking: the support hand hooks the charging-handle latch (left side of the T) and pulls it straight back
-      charge: { grip: vec3.create(-0.030, 0.0235, AR.upperRear + 0.0105), travelM: 0.085, release: 'slingshot', pullDir: vec3.create(0, 0, 1) },
+      charge: { grip: vec3.create(-0.030, 0.0235, AR.upperRear + 0.0105), travelM: 0.085, release: 'boltRelease', pullDir: vec3.create(0, 0, 1) }, // bolt locked back after an empty reload → slap the bolt catch; the charging handle is pulled only when the bolt is forward on an empty chamber
     },
     spec: carbineSpec(sightTop),
     grips: CARBINE_GRIPS,
@@ -504,7 +504,7 @@ export function carbineSpec(sightHeightM = 0.064): FirearmSpec {
     audio: GUNSHOTS.rifle556_16in,
     flash: { kelvin: 1900, luminance: 6e5, sizeM: 0.15, lightCandela: 25000, sidePorts: true, smoke: 1 },
     ejection: { speed: 4.2, up: 1.4, back: 1.2, spinRad: 28 },
-    hipOffset: [0.135, -0.165, -0.36],
+    hipOffset: [0.12, -0.135, -0.34],
     eyeRelief: 0.075,
     adsTime: 0.26,
     drawTime: 0.6,

@@ -3,7 +3,7 @@
 // Headless capture: &offscreen=1&frames=12
 
 import { Engine, FirearmModel, mat4, quat, vec3, DEG2RAD, box, Material, RenderObject, Mesh } from '@fondaine/gl';
-import { buildCompactPistol, buildCarbine, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, exportGLB, AssetLibrary, spawnGLTF } from '@fondaine/oaxis';
+import { buildCompactPistol, buildCarbine, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, exportGLB, AssetLibrary, spawnGLTF, fitWeaponGrips, weaponSignedDistance, debugHandClearance, COMPACT_PISTOL_GRIPS, CARBINE_GRIPS } from '@fondaine/oaxis';
 
 declare global { interface Window { __test?: Record<string, unknown> } }
 
@@ -33,6 +33,13 @@ engine.scene.add(tableObj);
 // ------------------------------------------------------------------------ models
 status.textContent = 'Building models…';
 const builds = { pistol: buildCompactPistol(engine.renderer), carbine: buildCarbine(engine.renderer) };
+// grips fitted to the geometry like in the game (?fit=0 shows the authored poses)
+const fitReports: Record<string, unknown> = {};
+if (params.get('fit') !== '0') for (const [k, b] of Object.entries(builds)) if (b.grips) { const r = fitWeaponGrips(b.grips, b.model); b.grips = r.grips; fitReports[k] = r.reports; }
+(window as unknown as Record<string, unknown>).__fit = fitReports;
+(window as unknown as Record<string, unknown>).__builds = builds;
+(window as unknown as Record<string, unknown>).__clear = (k: Key, pose: 'right' | 'left', fitted: boolean) => { const g = fitted ? builds[k].grips! : (k === 'pistol' ? COMPACT_PISTOL_GRIPS : CARBINE_GRIPS); return debugHandClearance(g[pose]!, builds[k].model, pose === 'right' ? 1 : -1); };
+(window as unknown as Record<string, unknown>).__sd = (k: Key, p: number[]) => weaponSignedDistance(builds[k].model, p);
 type Key = keyof typeof builds;
 let current: Key = (params.get('model') as Key) in builds ? (params.get('model') as Key) : 'pistol';
 const rest = (m: FirearmModel) => {

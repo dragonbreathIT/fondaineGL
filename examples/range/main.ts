@@ -3,7 +3,7 @@
 
 import { Engine, FPSController, Firearm, registerSurfaces, surfaceAlbedoTable, CameraRig, quat, DEG2RAD, vec3 } from '@fondaine/gl';
 import { ZONES, FOOTSTEPS } from '@fondaine/vorp';
-import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, AssetLibrary, blendPose } from '@fondaine/oaxis';
+import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, AssetLibrary, blendPose, fitWeaponGrips, fitSupportPose } from '@fondaine/oaxis';
 import { buildRange } from './range';
 
 declare global { interface Window { __test?: Record<string, unknown>; engine?: Engine } }
@@ -138,7 +138,21 @@ if (assets && !assets.empty) {
 }
 /** Weapon grips plus the optional support-hand poses for racking (over the slide) and slapping the bolt catch. */
 type Grips = WeaponGrips & { leftOnCharge?: HandPose; leftOnBoltRelease?: HandPose };
-const gripsFor = new Map<Firearm, Grips | undefined>([[weapons[0], carbine.grips], [weapons[1], pistol.grips]]);
+// grip poses are authored per weapon, then fitted to the actual geometry (fingers wrap until they touch; fit=0 disables)
+const fitGrips = (g: WeaponGrips | undefined, w: Firearm): Grips | undefined => {
+  if (!g || params.get('fit') === '0') return g;
+  const t0 = performance.now();
+  const r = fitWeaponGrips(g, w.model);
+  console.info(`[oaxis] grip fit ${w.spec.name}: ${Object.entries(r.reports).map(([k, v]) => `${k} ${v.changed} digits${v.palmPush ? ` palm +${(v.palmPush * 1000).toFixed(1)}mm` : ''}`).join(', ')} in ${(performance.now() - t0).toFixed(0)} ms`);
+  return r.grips;
+};
+const gripsFor = new Map<Firearm, Grips | undefined>([[weapons[0], fitGrips(carbine.grips, weapons[0])], [weapons[1], fitGrips(pistol.grips, weapons[1])]]);
+const fittedSupport = new Map<string, HandPose>();
+const fitOnce = (key: string, w: Firearm, make: () => HandPose): HandPose => {
+  let p = fittedSupport.get(key);
+  if (!p) { p = params.get('fit') === '0' ? make() : fitSupportPose(make(), w.model); fittedSupport.set(key, p); }
+  return p;
+};
 const smooth = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 const shiftPose = (p: HandPose, ax: ArrayLike<number>, d: number): HandPose => ({ ...p, position: [p.position[0] + ax[0] * d, p.position[1] + ax[1] * d, p.position[2] + ax[2] * d] });
 /** Default racking pose when the weapon's grips don't author one: overhand on the slide (pistol) or two fingers hooked in the charging-handle latch (rifle). */
@@ -175,7 +189,7 @@ engine.onLate.push(() => {
   let leftOverride: HandPose | null = null, leftWeight = 0;
   const ph = gun.reloadPhase, u = gun.phaseT, ax = gun.model.magAxis;
   const magPose = g.leftOnMagazine;
-  const chargePose = g.leftOnCharge ?? defaultChargePose(gun);
+  const chargePose = g.leftOnCharge ?? fitOnce(`charge:${gun.spec.name}`, gun, () => defaultChargePose(gun));
   const pull = gun.chargePullDir;
   const rackPose = (ru: number): { pose: HandPose; w: number } => {
     // 0–0.3 travel to the action, 0.3–0.55 hold + pull (hand follows the slide), 0.55–1 let go and return
@@ -200,7 +214,7 @@ engine.onLate.push(() => {
       leftOverride = u < 0.3 ? blendPose(magPose, r.pose, r.w) : r.pose;
       leftWeight = u < 0.3 ? 1 : r.w;
     } else if (ph === 'release') {
-      const bp = g.leftOnBoltRelease ?? defaultBoltReleasePose(gun);
+      const bp = g.leftOnBoltRelease ?? fitOnce(`bolt:${gun.spec.name}`, gun, () => defaultBoltReleasePose(gun));
       if (u < 0.5) { leftOverride = blendPose(magPose, bp, smooth(u / 0.45)); leftWeight = 1; }
       else { leftOverride = bp; leftWeight = 1 - smooth((u - 0.55) / 0.45); }
     }

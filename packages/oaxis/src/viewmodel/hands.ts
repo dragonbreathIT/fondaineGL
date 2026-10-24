@@ -13,7 +13,7 @@ import { BONES, BoneFrame, basisQuat, bindInverses, buildHandMesh, handBoneFrame
 
 export { basisQuat } from './hand-mesh';
 
-export interface FingerPose { curl: [number, number, number]; spread?: number }
+export interface FingerPose { curl: [number, number, number]; spread?: number; /** Keep as authored when grips are fitted to the weapon (trigger finger). */ lock?: boolean }
 export interface ThumbPose {
   /** Metacarpal direction in hand space (normalised internally). */
   dir: [number, number, number];

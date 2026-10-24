@@ -396,7 +396,7 @@ export function compactPistolSpec(sightHeightM: number = C15.sightLine): Firearm
     audio: GUNSHOTS.pistol9mm,
     flash: { kelvin: 1850, luminance: 4.5e5, sizeM: 0.07, lightCandela: 12000, sidePorts: false, smoke: 0.5 },
     ejection: { speed: 3.2, up: 2.4, back: 1.0, spinRad: 35 },
-    hipOffset: [0.05, -0.15, -0.40],
+    hipOffset: [0.05, -0.118, -0.38],    // high ready: the slide sits just under the eye line, grip and hands in view
     eyeRelief: 0.56,              // arms extended, two-handed
     adsTime: 0.22,
     action: { travelM: C15.slideTravel, backMs: 5, returnMs: 8, lockOpenOnEmpty: true, lockFraction: 0.93 },

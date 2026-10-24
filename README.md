@@ -78,6 +78,10 @@ URL options: `?rig=bodycam`, `?weapon=pistol`, `?sun=12&az=250` (low sun, golden
 
 ---
 
+### Hands and grips
+
+The first-person hands are a procedurally sculpted, skinned hand + forearm mesh per side (`packages/oaxis/src/viewmodel/hand-mesh.ts`: SDF → surface nets → linear-blend skinning over 18 joints; bare skin or glove). Grip poses are authored per weapon (`COMPACT_PISTOL_GRIPS`, `CARBINE_GRIPS`) and then **fitted to the weapon geometry at load** (`fitWeaponGrips` in `viewmodel/grip-fit.ts`): each phalanx is curled until it touches the weapon's triangles, the palm is pushed out if it is inside the frame, and the trigger finger keeps its authored pose. Works for any `FirearmModel`, including glTF guns. `?fit=0` shows the raw authored poses (range and viewer).
+
 ### Range URL parameters
 
 `examples/range/?rig=bodycam` (or `eyes`) · `sun=38&az=145` sun elevation/azimuth · `tex=1024` procedural texture size · `debug=N` render debug view (1 normals, 2 AO, 3 velocity, 4 depth, 5 luminance false-colour, 6 raw HDR, 7 sky visibility, 8 ambient-only, 9 direct-only; also in F1 → AO & AA) · `demo=1&yaw=0&pitch=-1&ads=1&shots=3&fireAt=20` scripted capture.
