@@ -4,6 +4,7 @@
 
 import { FGLDevice, mipCount } from './device';
 import { TextureCache } from './texture';
+import { Clouds, CloudBlobOptions, CloudHandle } from './clouds';
 
 export interface SkySettings {
   /** Sun elevation above horizon (degrees). */
@@ -207,26 +208,48 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
-/** Bakes the sky into a cube texture (with mips) in absolute luminance. */
+/** Per-frame inputs the sky needs for its clouds (camera, time step, wind aloft). */
+export interface SkyFrameInput {
+  camPos: ArrayLike<number>;
+  dt: number;
+  /** Wind at cloud altitude (m/s, x and z). Defaults to still air. */
+  windAloft?: ArrayLike<number>;
+}
+
+/**
+ * Bakes the clear atmosphere into a cube texture (with mips) in absolute luminance, owns the volumetric
+ * cloud system (`clouds`) and composites both into `envCube`, the environment the IBL/SH are filtered from.
+ */
 export class Sky {
   readonly settings: SkySettings = { ...defaultSky };
+  /** Clear-sky atmosphere (no clouds): what the sky pass draws behind the cloud dome. */
   cube!: GPUTexture;
+  /** Atmosphere + clouds: the environment used for image-based lighting. */
+  envCube!: GPUTexture;
+  /** Volumetric / flat cloud layer (settings, `addCloud`). */
+  readonly clouds: Clouds;
   readonly size: number;
   private pipeline: GPUComputePipeline;
   private ubuf: GPUBuffer;
   private bg!: GPUBindGroup;
+  /** Bumps when the clear-sky cube is re-baked. */
   version = 0;
+  /** Bumps when `envCube` changed (IBL must then be re-filtered). */
+  envVersion = 0;
   private lastKey = '';
+  private lastView: SkyFrameInput = { camPos: [0, 100, 0], dt: 0 };
 
   constructor(private dev: FGLDevice, private tex: TextureCache, size = 128) {
     this.size = size;
     this.pipeline = dev.device.createComputePipeline({ layout: 'auto', compute: { module: dev.shader(SKY_WGSL, 'sky'), entryPoint: 'main' } });
     this.ubuf = dev.createBuffer(64, GPUBufferUsage.UNIFORM, 'sky.u');
-    this.cube = dev.device.createTexture({
+    const cubeDesc = (label: string): GPUTextureDescriptor => ({
       size: [size, size, 6], format: 'rgba16float', mipLevelCount: mipCount(size),
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-      label: 'sky.cube',
+      label,
     });
+    this.cube = dev.device.createTexture(cubeDesc('sky.cube'));
+    this.envCube = dev.device.createTexture(cubeDesc('sky.env'));
     this.bg = dev.device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
@@ -234,6 +257,7 @@ export class Sky {
         { binding: 1, resource: this.cube.createView({ dimension: '2d-array', baseMipLevel: 0, mipLevelCount: 1 }) },
       ],
     });
+    this.clouds = new Clouds(dev, tex, this.cube);
   }
 
   /** Sun direction (towards the sun). */
@@ -246,11 +270,60 @@ export class Sky {
     return [t[0] * E, t[1] * E, t[2] * E];
   }
 
-  /** Re-bakes if settings changed. Returns true when updated (IBL must then be refiltered). */
-  update(encoder?: GPUCommandEncoder): boolean {
+  /** Sun illuminance at an altitude above sea level (lux, linear RGB): less reddened than at the ground. */
+  sunIlluminanceAt(altitude: number): [number, number, number] {
+    const t = sunTransmittance({ ...this.settings, altitude });
+    const E = this.settings.sunIlluminance;
+    return [t[0] * E, t[1] * E, t[2] * E];
+  }
+
+  /**
+   * Place an individual cloud (see `Clouds.addCloud`): `{ position, size, density, mode: 'volumetric' | 'flat' }`.
+   * The cloud is painted into the weather field and drifts with the wind.
+   */
+  addCloud(o: CloudBlobOptions): CloudHandle { return this.clouds.addCloud(o); }
+
+  /** Atmosphere parameters that change the look of everything (used to invalidate caches). */
+  get atmosphereKey(): string {
+    const s = this.settings;
+    return [s.sunElevation, s.sunAzimuth, s.sunIlluminance, s.turbidity, s.rayleigh, s.ozone, s.mieG, s.altitude].join('|');
+  }
+
+  /**
+   * Per frame: re-bakes the atmosphere if its settings changed, advances/renders the clouds, and refreshes
+   * `envCube` when either changed. Returns true when `envCube` changed (IBL must then be refiltered).
+   */
+  update(encoder?: GPUCommandEncoder, view?: SkyFrameInput): boolean {
+    if (view) this.lastView = view;
+    const v = this.lastView;
+    const enc = encoder ?? this.dev.device.createCommandEncoder({ label: 'sky' });
     const key = JSON.stringify(this.settings);
-    if (key === this.lastKey) return false;
-    this.lastKey = key;
+    let skyChanged = false;
+    if (key !== this.lastKey) {
+      this.lastKey = key;
+      this.bakeAtmosphere(enc);
+      skyChanged = true;
+    }
+    const s = this.settings;
+    const c = this.clouds.settings;
+    const cloudsChanged = this.clouds.update(enc, {
+      camPos: v.camPos, dt: v.dt, sunDir: this.sunDir,
+      sunRGB: this.sunIlluminanceAt(c.altitude + c.thickness * 0.5),
+      rayleigh: s.rayleigh, turbidity: s.turbidity, skyKey: this.atmosphereKey,
+      windAloft: v.windAloft ?? [0, 0],
+    });
+    let envChanged = false;
+    if (skyChanged || cloudsChanged || this.envVersion === 0) {
+      this.clouds.compositeEnv(enc, this.envCube);
+      this.tex.mipgen.generate(this.envCube, 'color', enc);
+      this.envVersion++;
+      envChanged = true;
+    }
+    if (!encoder) this.dev.device.queue.submit([enc.finish()]);
+    return envChanged;
+  }
+
+  private bakeAtmosphere(enc: GPUCommandEncoder) {
     const s = this.settings;
     const sd = this.sunDir;
     const sun = this.sunIlluminanceRGB();
@@ -265,15 +338,12 @@ export class Sky {
       ground[0], ground[1], ground[2], 0,
     ]);
     this.dev.device.queue.writeBuffer(this.ubuf, 0, u);
-    const enc = encoder ?? this.dev.device.createCommandEncoder({ label: 'sky' });
     const pass = enc.beginComputePass({ label: 'sky bake' });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bg);
     pass.dispatchWorkgroups(Math.ceil(this.size / 8), Math.ceil(this.size / 8), 6);
     pass.end();
     this.tex.mipgen.generate(this.cube, 'color', enc);
-    if (!encoder) this.dev.device.queue.submit([enc.finish()]);
     this.version++;
-    return true;
   }
 }

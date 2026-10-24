@@ -46,8 +46,8 @@ struct Frame {
   extra2: vec4f,                  // 1264
   probeMin: vec4f,                // 1280 GI probe volume min (first probe centre − cell/2), w = cell size (m)
   probeSize: vec4f,               // 1296 nx, ny, nz, intensity (0 = disabled)
-  cloud: vec4f,                   // 1312 coverage (0..1), optical density, layer altitude (m), feature scale (m)
-  cloud2: vec4f,                  // 1328 drift x, drift z (m, accumulated wind), shadow strength, enabled
+  cloud: vec4f,                   // 1312 cloud shadow map centre x, z (m, slab-base plane), 1/(2·half extent), clouds enabled
+  cloud2: vec4f,                  // 1328 shadow edge fallback transmittance, cloud base altitude (m), shadow strength, dome map radius
 };
 
 struct Light {
@@ -79,6 +79,8 @@ struct Exposure {
 @group(0) @binding(12) var probeR: texture_3d<f32>;
 @group(0) @binding(13) var probeG: texture_3d<f32>;
 @group(0) @binding(14) var probeB: texture_3d<f32>;
+@group(0) @binding(15) var cloudShadowTex: texture_2d<f32>;
+@group(0) @binding(16) var cloudDomeTex: texture_2d<f32>;
 `;
 
 export const WGSL_UTIL = /* wgsl */ `
@@ -291,41 +293,32 @@ fn heightFog(camPos: vec3f, worldPos: vec3f) -> vec4f {
 }
 `;
 
-// Procedural cloud layer (cumulus/stratocumulus deck at a fixed altitude). Shared by the sky pass (what you
-// see) and surface shading (cloud shadows drifting over the ground, consistent with the visible clouds).
+// Clouds (see clouds.ts). The volumetric layer is ray-marched into a direction-indexed dome texture and its
+// sun transmittance into a 2D shadow map; here surfaces and the sky pass just sample them.
 export const WGSL_CLOUDS = /* wgsl */ `
-fn cHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
-fn cNoise(p: vec2f) -> f32 {
-  let i = floor(p);
-  let f = fract(p);
-  let u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(cHash(i), cHash(i + vec2f(1.0, 0.0)), u.x), mix(cHash(i + vec2f(0.0, 1.0)), cHash(i + vec2f(1.0, 1.0)), u.x), u.y);
-}
-/// Cloud density (0..1) at layer coordinates (metres in the layer plane). octaves trades detail for cost.
-fn cloudDensity(xz: vec2f, octaves: i32) -> f32 {
-  let s = frame.cloud.w;
-  var p = (xz + frame.cloud2.xy) / s;
-  var a = 0.5;
-  var v = 0.0;
-  var norm = 0.0;
-  for (var o = 0; o < 6; o++) {
-    if (o >= octaves) { break; }
-    v += a * cNoise(p);
-    norm += a;
-    p = mat2x2f(1.6, 1.2, -1.2, 1.6) * p + vec2f(7.3, -3.1);
-    a *= 0.5;
-  }
-  v /= norm;
-  let cov = frame.cloud.x;
-  return saturate((v - (1.0 - cov)) / max(cov * 0.6, 1e-3));
-}
-/// Fraction of direct sunlight reaching a surface point through the cloud deck.
+/// Fraction of direct sunlight reaching a surface point through the clouds (0..1).
 fn cloudShadow(worldPos: vec3f) -> f32 {
-  if (frame.cloud2.w < 0.5 || frame.sunDir.y <= 0.01) { return 1.0; }
-  let t = (frame.cloud.z - worldPos.y) / frame.sunDir.y;
+  if (frame.cloud.w < 0.5 || frame.sunDir.y <= 0.01) { return 1.0; }
+  let t = (frame.cloud2.y - worldPos.y) / frame.sunDir.y;
   let p = worldPos.xz + frame.sunDir.xz * t;
-  let d = cloudDensity(p, 4);
-  return 1.0 - frame.cloud2.z * (1.0 - exp(-d * frame.cloud.y * 3.0));
+  let uv = (p - frame.cloud.xy) * frame.cloud.z + 0.5;
+  let T = textureSampleLevel(cloudShadowTex, linearClamp, uv, 0.0).r;
+  // outside the map: fall back to the average transmittance of the deck
+  let edge = 1.0 - smoothstep(0.42, 0.5, max(abs(uv.x - 0.5), abs(uv.y - 0.5)));
+  let Tm = mix(frame.cloud2.x, T, edge);
+  return 1.0 - frame.cloud2.z * (1.0 - Tm);
+}
+/// Paraboloid dome coordinates for a view direction (upper hemisphere + a little below the horizon).
+fn cloudDomeUV(dir: vec3f) -> vec2f {
+  let p = dir.xz / (1.0 + max(dir.y, -0.3));
+  return p / frame.cloud2.w * 0.5 + 0.5;
+}
+/// Clouds along a view direction: rgb = premultiplied radiance (cd/m²), a = transmittance of the sky behind.
+fn cloudDome(dir: vec3f) -> vec4f {
+  if (frame.cloud.w < 0.5) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  let p = dir.xz / (1.0 + max(dir.y, -0.3));
+  if (dot(p, p) >= frame.cloud2.w * frame.cloud2.w) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  return textureSampleLevel(cloudDomeTex, linearClamp, p / frame.cloud2.w * 0.5 + 0.5, 0.0);
 }
 `;
 

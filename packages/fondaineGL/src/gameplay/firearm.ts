@@ -791,6 +791,7 @@ export class Firearm extends Behaviour {
     // sound: suppressed first-round pop if the can had time to refill with air
     const extra: Record<string, number> = {};
     if (s.suppressed) { extra.suppress = 1; extra.firstPopDb = this.engine.time - this.lastShotTime > 4 ? 4 : 0; }
+    if (this.mode === 'auto') extra.auto = 1; // recorded full-auto pool when one is loaded
     if (this.effectsEnabled) this.audio.gunshot(s.audio, muzzle, dir, this.local(this.model.ejectionPort), extra);
 
     // recoil: momentum → linear push into the shoulder + muzzle rise about the shoulder

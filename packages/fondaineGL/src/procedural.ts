@@ -201,6 +201,7 @@ fn recipe(uv: vec2f) -> S {
       s.height = 0.5 + 0.06 * fine + 0.35 * stipple;
     }
     case 5u: { // painted steel (AR500 targets, frames): paint over dark steel, chips + rust
+      // 'extra' = outdoor weathering (0..1): rust streaks running down (+v), grime where it meets the ground (v≈0)
       let fine = fbm(uv, 64, 3, seed);
       let orange = fbm(uv, 24, 4, seed + 2u);
       let chips = smoothstep(0.62, 0.7, fbm(uv, 10, 6, seed + 6u) * 0.5 + 0.5) * wear;
@@ -210,10 +211,22 @@ fn recipe(uv: vec2f) -> S {
       let rustC = mix(vec3f(0.18, 0.06, 0.02), vec3f(0.35, 0.13, 0.04), rustN * 0.5 + 0.5);
       var c = P.color.rgb * (0.94 + 0.05 * orange + 0.03 * fine);
       c = mix(c, mix(steel, rustC, rust), chips);
+      var streak = 0.0;
+      var grime = 0.0;
+      if (extra > 0.0) {
+        // streaks: thin vertical runs seeded at a few u positions, fading downwards; stronger near the top
+        let col = gnoise(vec2f(uv.x * 60.0, uv.y * 1.5), vec2i(60, 2), seed + 21u);
+        let run = smoothstep(0.55, 0.9, abs(col)) * smoothstep(0.0, 0.35, 1.0 - uv.y) * (0.5 + 0.5 * fbm(uv, 6, 3, seed + 23u));
+        streak = saturate(run * 1.3) * extra;
+        grime = smoothstep(0.22, 0.0, uv.y) * extra * (0.6 + 0.4 * fbm(uv, 12, 3, seed + 25u));
+        c = mix(c, rustC * 0.9, streak * 0.7);
+        c = mix(c, c * vec3f(0.45, 0.42, 0.38), grime * 0.8);
+      }
       s.albedo = c;
       s.metal = chips * (1.0 - rust) * 0.9;
       s.rough = mix(0.45 + 0.08 * orange, mix(0.45, 0.85, rust), chips);
-      s.height = 0.5 + 0.04 * orange + 0.03 * fine - 0.25 * chips;
+      s.rough = mix(s.rough, 0.85, max(streak * 0.6, grime * 0.7));
+      s.height = 0.5 + 0.04 * orange + 0.03 * fine - 0.25 * chips - 0.05 * streak;
     }
     case 6u: { // ground: packed dirt with pebbles and dry grass patches
       let base = fbm(uv, 4, 6, seed);
@@ -230,16 +243,40 @@ fn recipe(uv: vec2f) -> S {
       s.rough = 0.9 - 0.15 * pebble;
       s.ao = 1.0 - 0.35 * grassMask * (1.0 - blades);
     }
-    case 7u: { // gravel
-      let w = worley(uv, 36, seed);
-      let w2 = worley(uv, 90, seed + 3u);
-      let edge = smoothstep(0.0, 0.12, w.y - w.x);
-      let stone = mix(P.color.rgb, P.color2.rgb, w.z) * (0.75 + 0.5 * w2.z);
-      let gap = 1.0 - edge;
-      s.albedo = mix(stone * (0.9 + 0.2 * fbm(uv, 64, 3, seed + 5u)), vec3f(0.12, 0.1, 0.08), gap * 0.8);
-      s.height = 0.5 + 0.45 * (1.0 - w.x) * edge - 0.3 * gap;
-      s.rough = 0.8 - 0.15 * w2.z;
-      s.ao = 1.0 - 0.6 * gap;
+    case 7u: { // range gravel: 1–2 cm angular crushed stone in a bed of fines/dust, size variation, worn lanes
+      // 'extra' = wear (compacted, dusty tyre / foot paths, 0..1); P.misc.x = tile metres (stones scale with it)
+      let tm = max(P.misc.x, 0.25);
+      let fS = i32(round(tm * 70.0));   // ≈ 1.4 cm stones
+      let fM = i32(round(tm * 36.0));   // ≈ 2.8 cm stones (sparser)
+      let fL = i32(round(tm * 16.0));   // the odd 6 cm cobble
+      let ws = worley(uv, fS, seed);
+      let wm = worley(uv, fM, seed + 3u);
+      let wl = worley(uv, fL, seed + 5u);
+      // angular facets: cell distance warped by per-cell noise, hard edge where cells meet (F2 − F1)
+      let facet = gnoise(uv * f32(fS) * 3.0, vec2i(fS * 3), seed + 7u);
+      let stoneS = smoothstep(0.02, 0.09, ws.y - ws.x) * step(0.18, ws.z);
+      let stoneM = smoothstep(0.03, 0.14, wm.y - wm.x) * step(0.62, wm.z);
+      let stoneL = smoothstep(0.05, 0.2, wl.y - wl.x) * step(0.9, wl.z);
+      let stone = max(stoneS, max(stoneM, stoneL));
+      // compacted wear lanes: low-frequency bands where traffic has ground the stones into the fines
+      let lanes = smoothstep(0.15, 0.55, fbm(uv, 2, 3, seed + 11u) * 0.5 + 0.5) * extra;
+      let wearK = 1.0 - 0.75 * lanes;
+      let dust = smoothstep(0.3, 0.9, fbm(uv, 24, 3, seed + 13u) * 0.5 + 0.5);
+      // stone colours: a mix of grey, buff and darker basalt-like pieces, each piece one colour
+      let idc = select(ws.z, select(wm.z, wl.z, stoneL > 0.5), stoneM > 0.5);
+      var stoneC = mix(P.color.rgb, P.color2.rgb, smoothstep(0.3, 0.7, idc));
+      stoneC = mix(stoneC, vec3f(0.5, 0.47, 0.42), step(0.82, fract(idc * 7.31)) * 0.6);
+      stoneC *= 0.78 + 0.3 * facet + 0.12 * fbm(uv, 128, 2, seed + 17u);
+      let fines = vec3f(0.3, 0.27, 0.24) * (0.75 + 0.35 * dust + 0.1 * fbm(uv, 64, 3, seed + 19u));
+      var c = mix(fines, stoneC, stone * wearK);
+      c = mix(c, c * 0.72 + fines * 0.2, lanes * 0.5);          // lanes: dustier, duller, slightly darker
+      s.albedo = c;
+      let relS = (1.0 - ws.x * 1.6) * stoneS;
+      let relM = (1.0 - wm.x * 1.3) * stoneM * 1.6;
+      let relL = (1.0 - wl.x) * stoneL * 2.4;
+      s.height = 0.35 + 0.5 * max(relS, max(relM, relL)) * wearK + 0.08 * dust;
+      s.rough = mix(0.86, 0.68, stone * (1.0 - lanes)) + 0.06 * facet;
+      s.ao = 1.0 - 0.45 * (1.0 - stone) * (1.0 - lanes);
     }
     case 8u: { // brass (cartridge cases): yellow metal, tarnish
       let fine = fbm(uv, 48, 4, seed);
@@ -437,7 +474,7 @@ const DEFAULTS: Record<RecipeKind, Required<Omit<RecipeParams, 'size' | 'seed'>>
   polymer: { tileMeters: 0.2, color: [0.03, 0.03, 0.032], color2: [0, 0, 0], wear: 0, dirt: 0.2, roughness: 0.62, bumpMm: 0.15, extra: 0 },
   paintedSteel: { tileMeters: 0.5, color: [0.8, 0.8, 0.78], color2: [0, 0, 0], wear: 0.35, dirt: 0, roughness: -1, bumpMm: 0.3, extra: 0 },
   ground: { tileMeters: 4, color: [0.24, 0.18, 0.12], color2: [0.09, 0.11, 0.04], wear: 0, dirt: 0, roughness: -1, bumpMm: 8, extra: 0 },
-  gravel: { tileMeters: 1.5, color: [0.5, 0.48, 0.45], color2: [0.32, 0.3, 0.28], wear: 0, dirt: 0, roughness: -1, bumpMm: 12, extra: 0 },
+  gravel: { tileMeters: 1.5, color: [0.52, 0.5, 0.46], color2: [0.3, 0.29, 0.28], wear: 0, dirt: 0, roughness: -1, bumpMm: 9, extra: 0.5 },
   brass: { tileMeters: 0.05, color: [0.95, 0.73, 0.38], color2: [0, 0, 0], wear: 0.2, dirt: 0, roughness: -1, bumpMm: 0.01, extra: 0 },
   paperTarget: { tileMeters: 0.45, color: [0.75, 0.05, 0.03], color2: [0, 0, 0], wear: 0, dirt: 0, roughness: -1, bumpMm: 0.05, extra: 0 },
   rubber: { tileMeters: 0.1, color: [0.025, 0.025, 0.025], color2: [0, 0, 0], wear: 0, dirt: 0, roughness: -1, bumpMm: 0.4, extra: 1 },

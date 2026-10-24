@@ -1,7 +1,7 @@
 // The fondaine engine: owns renderer (fondaineGL), physics (Rust/WASM), audio (vorp), input, ECS world,
 // scripts, tuning registry and dev panel, and runs the fixed-step simulation + variable-rate render loop.
 
-import { Renderer, Scene, Camera, RenderObject, Mesh, Material, Geometry, mat4, Mat4 } from '../gl';
+import { Renderer, Scene, Camera, RenderObject, Mesh, Material, Geometry, mat4, Mat4, Sky, Wind, CloudBlobOptions, CloudHandle } from '../gl';
 import { World, Entity, defineComponent } from './ecs';
 import { Transform, TransformC } from './transform';
 import { Behaviour, ScriptsC } from './script';
@@ -86,6 +86,9 @@ export class Engine {
     this.world.onRemoved(MeshRendererC, (_e, mr) => this.scene.remove(mr.object));
     this.world.onRemoved(ScriptsC, (_e, list) => { for (const s of list) s.onDestroy?.(); });
     registerRenderTuning(this.tuning, this.renderer);
+    // wind → ambience bed (vorp): level/gustiness follow the engine wind whenever its settings change
+    this.renderer.wind.onSettingsChanged = (w) => this.audio.setWind(w.speed, w.gustiness, w.gustFrequency);
+    this.audio.setWind(this.renderer.wind.settings.speed, this.renderer.wind.settings.gustiness, this.renderer.wind.settings.gustFrequency);
     this.devui.statsText = () => {
       const s = this.renderer.stats;
       const m = this.audio.vorp?.meters;
@@ -93,6 +96,13 @@ export class Engine {
         (m ? `audio: ${m.voices} voices  eardrum ${m.earSpl.toFixed(0)} dB SPL  TTS ${m.tts.toFixed(1)} dB  dsp ${(m.cpu * 100).toFixed(1)}%` : 'audio: click to start');
     };
   }
+
+  /** Sky and atmosphere (`sky.settings`), clouds (`sky.clouds.settings`, `sky.addCloud`). */
+  get sky(): Sky { return this.renderer.sky; }
+  /** Engine-wide wind: `wind.set({ speed, direction, gustiness })`, `wind.vector`, `wind.onGust`. */
+  get wind(): Wind { return this.renderer.wind; }
+  /** Spawn a cloud: `engine.cloud({ position, size, density, mode: 'volumetric' | 'flat' })`. */
+  cloud(o: CloudBlobOptions): CloudHandle { return this.renderer.sky.addCloud(o); }
 
   static async create(opts: EngineOptions): Promise<Engine> {
     const base = opts.baseUrl ?? '/';

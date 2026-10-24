@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "serve": "node tools/serve.mjs",
     "dev": "node tools/build.mjs --watch --serve",
-    "test": "cd crates && cargo test --release && cd .. && node tools/run-ts.mjs packages/fondaineGL/test/geometry.test.ts && node tools/run-ts.mjs packages/vorp/test/offline.test.ts && node packages/oaxis/src/animation/__tests__/anim.test.mjs",
+    "test": "cd crates && cargo test --release && cd .. && node tools/run-ts.mjs packages/fondaineGL/test/geometry.test.ts && node tools/run-ts.mjs packages/fondaineGL/test/terrain.test.ts && node tools/run-ts.mjs packages/vorp/test/offline.test.ts && node packages/oaxis/src/animation/__tests__/anim.test.mjs",
     "capture": "node tools/build.mjs && node tools/capture/batch.mjs"
   },
   "devDependencies": {
