@@ -9,6 +9,25 @@ export interface GunshotPreset {
   params: Record<string, number>;
   /** Mechanical action: hit schedule on the receiver modal bank (ms after the shot). */
   action: { brightness: number; hits: { timeMs: number; amp: number; contactMs: number; noiseDb?: number }[]; level: number };
+  /**
+   * Recorded layers (manifest sound slots, see `tools/fetch-sounds.mjs`). A slot names a *family*: `shot.rifle556`
+   * matches `shot.rifle556`, `shot.rifle556.01`, `.02`, … and one is picked at random per shot (never the same twice
+   * in a row, ±1 semitone, ±1 dB). When none of the slots is loaded the shot is pure synthesis, exactly as without
+   * this field. `shot` is the muzzle report; `shotTail` is layered under it at `sampleTailDb` (distant / reflected
+   * takes of the same gun); `auto` is used instead of `shot` when the host passes `extra.auto = 1`; `suppressed`
+   * when `suppress` > 0.5.
+   */
+  samples?: { shot: string[]; shotTail?: string[]; auto?: string[]; suppressed?: string[] };
+  /**
+   * Level of the synthesized layer kept under a recorded shot (dB relative to the full synth): the body / sub
+   * punch and the compacted blast spike still drive the chest and the hearing model; the recorded report carries
+   * the character. ≤ −90 disables the bed. Default −9.
+   */
+  synthBedDb?: number;
+  /** Level of the recorded report relative to `peakSpl` (dB). Default 0: the sample's peak sits at `peakSpl`. */
+  sampleTrimDb?: number;
+  /** Level of the `shotTail` layer relative to the report (dB). Default −8. */
+  sampleTailDb?: number;
 }
 
 export const GUNSHOTS: Record<string, GunshotPreset> = {
@@ -22,29 +41,34 @@ export const GUNSHOTS: Record<string, GunshotPreset> = {
     params: { peakSpl: 160, positiveMs: 0.9, decayB: 1.6, crackDb: -2, crackHz: 4200, crackMs: 8, turbDb: -5, turbMs: 360, turbHp: 150, turbLp: 6500, bodyDb: -9, bodyHz: 70, bodyMs: 320, bodyDrop: 0.4, subDb: -12, subHz: 44, subMs: 420, driveDb: 12, directivityDb: 9, rearLpHz: 5000, tailSendDb: 4 },
     // hammer, bolt unlock + buffer spring 'sproing', bolt slams home
     action: { brightness: 1.35, level: 1.4, hits: [{ timeMs: -3, amp: 0.15, contactMs: 0.05, noiseDb: -14 }, { timeMs: 3, amp: 1.1, contactMs: 0.12, noiseDb: -6 }, { timeMs: 40, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 72, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
+    samples: { shot: ['shot.rifle556'], shotTail: ['shot.rifle556.mid'], auto: ['shot.rifle556.auto'], suppressed: ['shot.rifle556.suppressed', 'shot.suppressed'] },
   },
   rifle556_10in: {
     name: '5.56×45 — 10.3" SBR',
     // more unburnt powder: louder, more roar and body, slightly lower crack
     params: { peakSpl: 163, positiveMs: 1.1, decayB: 1.5, crackDb: -1, crackHz: 3800, crackMs: 10, turbDb: -3, turbMs: 380, turbHp: 140, turbLp: 5500, bodyDb: -7, bodyHz: 60, bodyMs: 380, bodyDrop: 0.4, subDb: -9, subHz: 42, subMs: 480, driveDb: 14, directivityDb: 7, rearLpHz: 6500, tailSendDb: 5 },
     action: { brightness: 1.3, level: 1.4, hits: [{ timeMs: -3, amp: 0.15, contactMs: 0.05, noiseDb: -14 }, { timeMs: 2.5, amp: 1.2, contactMs: 0.12, noiseDb: -6 }, { timeMs: 36, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 64, amp: 1.6, contactMs: 0.09, noiseDb: -3 }] },
+    samples: { shot: ['shot.rifle556'], shotTail: ['shot.rifle556.mid'], auto: ['shot.rifle556.auto'], suppressed: ['shot.rifle556.suppressed', 'shot.suppressed'] },
   },
   rifle308_bolt: {
     name: '.308 Win — 20" bolt action',
     // deep boom: lower crack, the biggest body and sub, long roar
     params: { peakSpl: 163, positiveMs: 1.4, decayB: 1.3, crackDb: -4, crackHz: 2600, crackMs: 12, turbDb: -5, turbMs: 360, turbHp: 110, turbLp: 4800, bodyDb: -6, bodyHz: 50, bodyMs: 450, bodyDrop: 0.35, subDb: -7, subHz: 34, subMs: 560, driveDb: 13, directivityDb: 10, rearLpHz: 4500, tailSendDb: 6 },
     action: { brightness: 0.85, level: 0.6, hits: [{ timeMs: -4, amp: 0.45, contactMs: 0.06, noiseDb: -10 }] },
+    samples: { shot: ['shot.rifle308', 'shot.rifle3006'], shotTail: ['shot.rifle3006.mid'] },
   },
   pistol9mm: {
     name: '9×19 — 4" pistol',
     // sharp hard BANG: strong short snap, little body, almost no sub; slide clack carries a lot of the character
     params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.7, crackDb: -1, crackHz: 2300, crackMs: 7, turbDb: -6, turbMs: 200, turbHp: 200, turbLp: 6000, bodyDb: -12, bodyHz: 100, bodyMs: 170, bodyDrop: 0.5, subDb: -20, subHz: 55, subMs: 160, driveDb: 11, directivityDb: 6, rearLpHz: 7000, precursorDb: -20, tailSendDb: 4 },
     action: { brightness: 0.95, level: 1.3, hits: [{ timeMs: -2, amp: 0.25, contactMs: 0.05, noiseDb: -12 }, { timeMs: 4, amp: 0.9, contactMs: 0.1, noiseDb: -6 }, { timeMs: 14, amp: 1.1, contactMs: 0.09, noiseDb: -4 }] },
+    samples: { shot: ['shot.pistol9'], shotTail: ['shot.pistol9.mid'], suppressed: ['shot.pistol9.suppressed', 'shot.suppressed'] },
   },
   pistol9mm_auto: {
     name: '9×19 — 4" select-fire pistol',
     params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.7, crackDb: -1, crackHz: 2400, crackMs: 6, turbDb: -5, turbMs: 140, turbHp: 200, turbLp: 6500, bodyDb: -12, bodyHz: 105, bodyMs: 150, bodyDrop: 0.5, subDb: -19, subHz: 58, subMs: 140, driveDb: 11, directivityDb: 6, rearLpHz: 7000, precursorDb: -20, tailSendDb: 3 },
     action: { brightness: 1.0, level: 1.3, hits: [{ timeMs: -2, amp: 0.25, contactMs: 0.05, noiseDb: -12 }, { timeMs: 4, amp: 0.9, contactMs: 0.1, noiseDb: -6 }, { timeMs: 12, amp: 1.0, contactMs: 0.09, noiseDb: -4 }] },
+    samples: { shot: ['shot.pistol9'], shotTail: ['shot.pistol9.mid'], auto: ['shot.smg9'], suppressed: ['shot.pistol9.suppressed', 'shot.suppressed'] },
   },
 };
 
@@ -100,7 +124,10 @@ export const ZONES: Record<string, ZonePreset> = {
 
 export const zoneSendDb = (z: ZonePreset) => sendFromCriticalDistance(z.criticalDistance);
 
-/** Impact sounds by surface material (noise sources), at 1 m. */
+/**
+ * Impact sounds by surface material (noise sources), at 1 m. A loaded recording in slot family `impact.<material>`
+ * replaces the noise layer (its peak at `levelSpl`), see `VorpBase.impact`.
+ */
 export const IMPACTS: Record<string, Record<string, number>> = {
   dirt: { levelSpl: 112, attackMs: 0.3, decayMs: 90, hpHz: 80, lpHz: 2500, thumpHz: 70, thumpDb: 0, thumpMs: 70, grainsPerS: 900, grainDb: -14, resonance: 0.7 },
   gravel: { levelSpl: 116, attackMs: 0.2, decayMs: 110, hpHz: 300, lpHz: 7000, thumpHz: 90, thumpDb: -8, thumpMs: 40, grainsPerS: 2200, grainDb: -6, resonance: 0.8 },
@@ -110,7 +137,7 @@ export const IMPACTS: Record<string, Record<string, number>> = {
   cardboard: { levelSpl: 104, attackMs: 0.08, decayMs: 40, hpHz: 400, lpHz: 5000, thumpHz: 120, thumpDb: -6, thumpMs: 30, grainsPerS: 0, grainDb: -30, resonance: 1.2 },
 };
 
-/** Footsteps (per step, at 1 m) by surface. */
+/** Footsteps (per step, at 1 m) by surface. Recordings: slot family `step.<surface>` (see `AudioSystem.footstep`). */
 export const FOOTSTEPS: Record<string, Record<string, number>> = {
   concrete: { levelSpl: 74, attackMs: 4, decayMs: 70, hpHz: 120, lpHz: 6000, thumpHz: 95, thumpDb: -3, thumpMs: 50, grainsPerS: 120, grainDb: -18, resonance: 0.8 },
   gravel: { levelSpl: 78, attackMs: 12, decayMs: 260, hpHz: 400, lpHz: 9000, thumpHz: 80, thumpDb: -10, thumpMs: 60, grainsPerS: 2600, grainDb: -2, resonance: 0.9 },
@@ -125,6 +152,13 @@ export const FOOTSTEPS: Record<string, Record<string, number>> = {
 export interface MechPreset {
   /** Noise layer (NOISE_PARAMS overrides at 1 m): the click / rasp / slap texture. */
   noise: Record<string, number>;
+  /**
+   * Recorded alternative (manifest sound slot family, e.g. `mech.magSeat` → `mech.magSeat.01`, `.02`, …). When
+   * loaded it replaces the noise layer: its peak is placed at `noise.levelSpl + 10 dB` (the noise level is an RMS,
+   * peaks sit ~10 dB above) + `sampleDb`; the ring layer stays. Missing → synthesis, exactly as without it.
+   */
+  sample?: string;
+  sampleDb?: number;
   /** Optional receiver-ring layer (modal hits on `receiverModes(brightness)`). */
   ring?: { brightness: number; level: number; hits: { timeMs: number; amp: number; contactMs: number; noiseDb?: number }[] };
 }
@@ -138,59 +172,71 @@ export interface MechPreset {
 export const MECH = {
   /** Magazine release button: a short, bright latch click. */
   magRelease: {
+    sample: 'mech.magRelease',
     noise: { levelSpl: 62, attackMs: 0.15, decayMs: 22, hpHz: 1800, lpHz: 9500, thumpHz: 420, thumpDb: -10, thumpMs: 7, resonance: 1.3 },
     ring: { brightness: 1.4, level: 0.2, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Empty magazine slides out of the well (polymer on aluminium). */
   magOut: {
+    sample: 'mech.magOut',
     noise: { levelSpl: 58, attackMs: 8, decayMs: 140, hpHz: 500, lpHz: 6000, thumpDb: -40, grainsPerS: 350, grainDb: -14, resonance: 0.8 },
   },
   /** Magazine landing on concrete: hard slap + bounce. */
   magDropConcrete: {
+    sample: 'mech.magDropConcrete',
     noise: { levelSpl: 86, attackMs: 0.08, decayMs: 60, hpHz: 220, lpHz: 7500, thumpHz: 150, thumpDb: 3, thumpMs: 38, grainsPerS: 500, grainDb: -10, resonance: 1.1, hit2Ms: 48, hit2Db: -9 },
     ring: { brightness: 0.55, level: 0.3, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
   },
   /** Magazine landing on dirt / grass: dull thud, no bounce. */
   magDropDirt: {
+    sample: 'mech.magDropDirt',
     noise: { levelSpl: 76, attackMs: 0.6, decayMs: 85, hpHz: 70, lpHz: 2400, thumpHz: 72, thumpDb: 5, thumpMs: 65, grainsPerS: 700, grainDb: -16, resonance: 0.75 },
   },
   /** Magazine seating: two-stage click (catch engages, then the mag seats fully ~35 ms later). */
   magSeat: {
+    sample: 'mech.magSeat',
     noise: { levelSpl: 68, attackMs: 0.1, decayMs: 34, hpHz: 650, lpHz: 8500, thumpHz: 230, thumpDb: -3, thumpMs: 22, resonance: 1.0, hit2Ms: 35, hit2Db: -2 },
     ring: { brightness: 1.15, level: 0.22, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Slide / carrier dragged back along the rails: a rasp with a spring hiss. */
   slideRack: {
+    sample: 'mech.slideRack',
     noise: { levelSpl: 62, attackMs: 5, decayMs: 125, hpHz: 750, lpHz: 7800, thumpDb: -40, grainsPerS: 1100, grainDb: -7, resonance: 0.9 },
     ring: { brightness: 1.25, level: 0.15, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
   },
   /** Slide / carrier hits its rear stop. */
   slideStop: {
+    sample: 'mech.slideStop',
     noise: { levelSpl: 66, attackMs: 0.08, decayMs: 40, hpHz: 480, lpHz: 9500, thumpHz: 270, thumpDb: -2, thumpMs: 18, resonance: 1.0 },
     ring: { brightness: 1.1, level: 0.19, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Spring slams the slide / carrier home and chambers a round. */
   slideHome: {
+    sample: 'mech.slideHome',
     noise: { levelSpl: 72, attackMs: 0.05, decayMs: 58, hpHz: 280, lpHz: 10500, thumpHz: 175, thumpDb: 2, thumpMs: 30, resonance: 1.0, hit2Ms: 7, hit2Db: -9 },
     ring: { brightness: 1.0, level: 0.17, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
   },
   /** AR charging handle: latch click, pull rasp, carrier reaches the rear. */
   chargingHandle: {
+    sample: 'mech.chargingHandle',
     noise: { levelSpl: 64, attackMs: 1.5, decayMs: 95, hpHz: 600, lpHz: 7200, thumpDb: -40, grainsPerS: 600, grainDb: -10, resonance: 0.9, hit2Ms: 65, hit2Db: -3 },
     ring: { brightness: 1.3, level: 0.14, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Bolt catch / slide stop slapped: a small, hard, bright click. */
   boltCatch: {
+    sample: 'mech.boltCatch',
     noise: { levelSpl: 66, attackMs: 0.08, decayMs: 28, hpHz: 950, lpHz: 9500, thumpHz: 320, thumpDb: -8, thumpMs: 12, resonance: 1.2 },
     ring: { brightness: 1.35, level: 0.15, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
   },
   /** Fire-selector detent. */
   selector: {
+    sample: 'mech.selector',
     noise: { levelSpl: 60, attackMs: 0.1, decayMs: 20, hpHz: 1500, lpHz: 9000, thumpDb: -40, resonance: 1.2, hit2Ms: 16, hit2Db: 2 },
     ring: { brightness: 1.75, level: 0.05, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
   },
   /** Hammer falls on an empty chamber. */
   dryFire: {
+    sample: 'mech.dryFire',
     noise: { levelSpl: 62, attackMs: 0.05, decayMs: 18, hpHz: 1200, lpHz: 9000, thumpHz: 350, thumpDb: -12, thumpMs: 8, resonance: 1.1 },
     ring: { brightness: 1.5, level: 0.15, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
   },

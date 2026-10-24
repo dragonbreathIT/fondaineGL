@@ -23,10 +23,20 @@ export interface ModelEntry extends AssetCredit {
   hints?: Record<string, unknown>;
 }
 
+export interface SoundEntry extends AssetCredit {
+  file: string;
+  gainDb?: number;
+  trimMs?: number;
+  durationS?: number;
+  loop?: boolean;
+}
+
 export interface AssetManifest {
   version: number;
   textures: Record<string, TextureEntry>;
   models: Record<string, ModelEntry>;
+  /** Recorded sounds (tools/fetch-sounds.mjs); played by vorp, see `AudioSystem.loadSoundAssets`. */
+  sounds?: Record<string, SoundEntry>;
 }
 
 export class AssetLibrary {
@@ -94,6 +104,7 @@ export class AssetLibrary {
     const out: AssetCredit[] = [];
     for (const [slot, e] of Object.entries(this.manifest.textures)) out.push({ ...e, slot });
     for (const [slot, e] of Object.entries(this.manifest.models)) out.push({ ...e, slot });
+    for (const [slot, e] of Object.entries(this.manifest.sounds ?? {})) out.push({ ...e, slot });
     return out;
   }
 }
