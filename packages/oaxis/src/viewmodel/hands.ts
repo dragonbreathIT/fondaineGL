@@ -254,14 +254,14 @@ function gloveCuff(): Geometry {
   // wrist skin ≈ 58 × 37 mm; the cuff hugs it with 2 mm of leather, from 6 mm before the wrist to 38 mm up the forearm
   const band = lathe([[0.0295, -0.006], [0.0315, -0.004], [0.0325, 0.0], [0.0335, 0.014], [0.0345, 0.03], [0.0335, 0.038], [0.0310, 0.040], [0.0295, 0.038]], seg(26)).rotateX(-Math.PI / 2).scale(1, 0.66, 1);
   // closure strap across the back of the wrist (dorsal = +y), 18 mm wide, ending in a pull tab
-  const strap = roundedBox(0.062, 0.0032, 0.018, 0.001).translate(0.004, 0.0255, 0.021);
-  const tab = roundedBox(0.016, 0.0036, 0.018, 0.0012).translate(0.041, 0.0245, 0.021);
+  const strap = roundedBox(0.056, 0.0024, 0.016, 0.0009).translate(0.002, 0.0238, 0.021);
+  const tab = roundedBox(0.011, 0.003, 0.012, 0.001).translate(0.0335, 0.023, 0.021);
   return Geometry.merge([band, strap, tab]).computeTangents();
 }
 
 /** Padded knuckle panel on the back of the hand (metacarpals): a low rounded plate, hand space. */
 function knucklePanel(): Geometry {
-  const plate = roundedBox(0.066, 0.006, 0.030, 0.0028, 4).translate(0, 0.0165, -0.070);
+  const plate = roundedBox(0.064, 0.0055, 0.028, 0.0026, 4).translate(0, 0.0205, -0.071);
   { const p = plate.positions; for (let k = 0; k < p.length; k += 3) { const xn = p[k] / 0.033; p[k + 1] -= 0.0032 * xn * xn; } } // arched across the hand
   return plate.computeNormals().computeTangents();
 }
