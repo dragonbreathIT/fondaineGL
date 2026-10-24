@@ -173,8 +173,10 @@ export class Firearm extends Behaviour {
   /** Current reload phase (null when not reloading) and normalised time 0..1 within it, for hand choreography. */
   reloadPhase: ReloadPhase | null = null;
   phaseT = 0;
-  /** Magazine drop/insert speeds (oAxis tuning). */
-  readonly magAnim = { ejectSpeed: 1.2, insertDistance: 0.14, seatFraction: 0.7 };
+  /** Magazine choreography (oAxis tuning): eject speed, how far down the vest is (where the fresh magazine comes from), when it seats, fumble odds. */
+  readonly magAnim = { ejectSpeed: 1.2, insertDistance: 0.14, vestDistance: 0.42, seatFraction: 0.72, fumbleChance: 0.25, fumbleExtra: 0.38, cameraDipDeg: 3.5 };
+  /** Set per reload: this one gets botched on the first insertion attempt (the magazine catches the magwell lip). */
+  fumbling = false;
 
   // recoil state
   private rot = { x: 0, y: 0, vx: 0, vy: 0 }; // pitch (x) / yaw (y) offsets, rad
@@ -298,7 +300,10 @@ export class Firearm extends Behaviour {
       .number(ga, re, 'magIn', { label: 'Reload: mag in', min: 0.05, max: 3, step: 0.01, unit: 's' })
       .number(ga, re, 'boltRelease', { label: 'Reload: release', min: 0.05, max: 2, step: 0.01, unit: 's' })
       .number(ga, re, 'charge', { label: 'Reload: rack', min: 0.2, max: 2, step: 0.01, unit: 's', help: 'Racking the slide / charging handle after an empty reload.' })
-      .number(ga, this.magAnim, 'ejectSpeed', { label: 'Mag eject speed', min: 0, max: 5, step: 0.05, unit: 'm/s' });
+      .number(ga, this.magAnim, 'ejectSpeed', { label: 'Mag eject speed', min: 0, max: 5, step: 0.05, unit: 'm/s' })
+      .number(ga, this.magAnim, 'vestDistance', { label: 'Reload: vest distance', min: 0.15, max: 0.8, step: 0.01, unit: 'm', help: 'How far below the magwell the fresh magazine starts (the pouch on the chest).' })
+      .number(ga, this.magAnim, 'fumbleChance', { label: 'Reload: fumble chance', min: 0, max: 1, step: 0.05, help: 'Odds that the magazine catches the magwell lip and needs a second push.' })
+      .number(ga, this.magAnim, 'cameraDipDeg', { label: 'Reload: camera dip', min: 0, max: 10, step: 0.1, unit: '°', help: 'The eyes glance down at the magwell during the reload.' });
   }
 
   /** Seconds into the current reload (−1 when not reloading). */
@@ -349,7 +354,7 @@ export class Firearm extends Behaviour {
     let t = 0;
     const push = (phase: ReloadPhase, d: number) => { plan.push({ phase, start: t, end: t + d }); t += d; };
     push('magOut', r.magOut);
-    push('magIn', r.magIn);
+    push('magIn', r.magIn + (this.fumbling ? this.magAnim.fumbleExtra : 0));
     if (this.reloadNeedsCharge) {
       const boltCatch = this.anim.lockedOpen && (this.model.charge?.release ?? 'slingshot') === 'boltRelease';
       if (boltCatch || !this.spec.action) push('release', r.boltRelease); else push('charge', r.charge ?? 0.6);
@@ -518,14 +523,26 @@ export class Firearm extends Behaviour {
     A.magOffset = 0; A.magVisible = true;
     if (this.reloadT >= 0 && this.model.magAxis) {
       const r = this.spec.reload, t = this.reloadT;
+      const magInLen = r.magIn + (this.fumbling ? this.magAnim.fumbleExtra : 0);
       if (t < r.magOut) {
+        // the viewmodel magazine stays seated until the release is pressed; the physics copy takes over
         A.magVisible = !this.magDropped;
-        A.magOffset = this.magAnim.ejectSpeed * t + 4.9 * t * t;
-        if (A.magOffset > 0.3) A.magVisible = false;
-      } else if (t < r.magOut + r.magIn) {
-        const u = (t - r.magOut) / r.magIn;
-        const k = Math.min(1, u / this.magAnim.seatFraction);
-        A.magOffset = this.magAnim.insertDistance * (1 - k * k * (3 - 2 * k));
+        A.magOffset = 0;
+      } else if (t < r.magOut + magInLen) {
+        // the fresh magazine rides up from the vest in the support hand; ease in, slow down to find the well
+        const u = (t - r.magOut) / magInLen, seat = this.magAnim.seatFraction, V = this.magAnim.vestDistance;
+        const sm = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+        if (!this.fumbling) {
+          const k = sm(u / seat);
+          A.magOffset = V * (1 - k);
+        } else {
+          // attempt 1 reaches the lip (offset ≈ 0.035) a bit early, bounces back to ≈ 0.07, attempt 2 seats
+          const u1 = seat * 0.6, u2 = seat * 0.78;
+          if (u < u1) A.magOffset = V - (V - 0.035) * sm(u / u1);
+          else if (u < u2) { const b = (u - u1) / (u2 - u1); A.magOffset = 0.035 + 0.04 * Math.sin(Math.PI * Math.min(1, b * 1.15)); }
+          else A.magOffset = 0.07 * (1 - sm((u - u2) / (seat - u2)));
+          if (u >= seat) A.magOffset = 0;
+        }
       }
     }
   }
@@ -661,11 +678,14 @@ export class Firearm extends Behaviour {
     this.phaseT = 0;
     this.rackSoundDone = 0;
     this.magDropped = false;
-    if (this.model.magBox) this.dropMagazine();
-    const port = this.local(this.model.ejectionPort);
-    this.audio.modal(receiverModes(1.4), [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }], port, 0.7); // mag release
-    this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 72, attackMs: 8, decayMs: 160, hpHz: 600, lpHz: 6000, thumpDb: -40 }, port, { delayMs: 60 }));
+    this.fumbling = this.rand.next() < this.magAnim.fumbleChance;
+    this.reloadEvents = 0;
+    // the thumb reaches the magazine release first; the button press and the drop follow in updateReload
   }
+  private reloadEvents = 0;
+  private dipCur = 0;
+  /** Time into magOut at which the thumb hits the release and the magazine drops. */
+  private get releaseAt(): number { return Math.min(0.12, this.spec.reload.magOut * 0.3); }
 
   private updateReload(dt: number) {
     const s = this.spec.reload;
@@ -678,10 +698,25 @@ export class Firearm extends Behaviour {
     const prevPhase = this.reloadPhase;
     this.reloadPhase = cur.phase;
     this.phaseT = Math.min(1, Math.max(0, (this.reloadT - cur.start) / Math.max(1e-6, cur.end - cur.start)));
-    if (cross(s.magOut + s.magIn * 0.7)) {
-      // magazine seats: two-stage click
+    // 1. thumb presses the magazine release: button click, then the magazine falls free
+    if (cross(this.releaseAt) && this.model.magBox) {
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 70, attackMs: 0.3, decayMs: 6, hpHz: 1500, lpHz: 9000, thumpDb: -30 }, port));
+      this.audio.modal(receiverModes(1.4), [{ timeMs: 6, amp: 0.25, contactMs: 0.06, noiseDb: -8 }], port, 0.6);
+      this.dropMagazine();
+      // the empty magazine slides out of the well: short friction hiss
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 64, attackMs: 8, decayMs: 120, hpHz: 600, lpHz: 6000, thumpDb: -40 }, port, { delayMs: 40 }));
+    }
+    const magInLen = s.magIn + (this.fumbling ? this.magAnim.fumbleExtra : 0);
+    const seatT = s.magOut + magInLen * this.magAnim.seatFraction;
+    // 2. (optional) the magazine catches the magwell lip: dull polymer thud, it is pulled back and pushed again
+    if (this.fumbling && cross(s.magOut + s.magIn * this.magAnim.seatFraction * 0.92)) {
+      this.audio.modal(receiverModes(0.8), [{ timeMs: 0, amp: 0.45, contactMs: 0.16, noiseDb: -6 }], port, 0.7);
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 62, attackMs: 2, decayMs: 40, hpHz: 300, lpHz: 3000, thumpDb: -10 }, port));
+    }
+    // 3. magazine seats: two-stage click; the follower now feeds the action
+    if (cross(seatT)) {
       this.audio.modal(receiverModes(1.15), [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }], port, 0.9);
-      // a fresh magazine goes in: the follower now feeds the action
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 66, attackMs: 1, decayMs: 25, hpHz: 900, lpHz: 7000, thumpDb: -20 }, port, { delayMs: 10 }));
       this.rounds = this.spec.magazineCapacity;
     }
     if (cur.phase === 'release') {
@@ -704,7 +739,15 @@ export class Firearm extends Behaviour {
       this.reloadT = -1;
       this.reloadPhase = null;
       this.rackPull = -1;
+      // a quiet breath out as the gun comes back up
+      const head = this.controller.eyePos;
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 50, attackMs: 90, decayMs: 420, hpHz: 250, lpHz: 2600, thumpDb: -40 }, [head[0], head[1] - 0.1, head[2]], { delayMs: 120 }));
     }
+    // the eyes glance down at the magwell while the hands work, back up for the rack / release
+    const dipTarget = this.reloadT >= 0 && (cur.phase === 'magOut' || cur.phase === 'magIn') ? this.magAnim.cameraDipDeg * DEG2RAD * (cur.phase === 'magOut' ? Math.min(1, this.phaseT * 2.5) : 1) : 0;
+    const dipNew = damp(this.dipCur, dipTarget, 0.12, dt);
+    this.controller.extraPitch -= dipNew - this.dipCur;
+    this.dipCur = dipNew;
   }
 
   /** Advance the fire selector (safe → semi → auto …) with a two-stage detent click and a thumb sweep. */

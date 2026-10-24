@@ -63,7 +63,7 @@ const frames = light ? 4 : 24;
 const common = `offscreen=1&frames=${frames}${light ? '&trees=0&grass=0&gi=0&tex=256&taa=0' : ''}`;
 const range = (q) => `${base}/examples/range/?${common}&${q}`;
 const viewer = (q) => `${base}/examples/viewer/?offscreen=1&frames=${light ? 6 : 24}${light ? '&tex=256' : ''}&${q}`;
-const reloadPlan = { pistol: [0.45, 0.85, 0.6], carbine: [0.55, 0.95, 0.35] };
+const reloadPlan = { pistol: [0.45, 0.85, 0.6], carbine: [0.55, 0.95, 0.35] }; // (fumble=0 keeps the plan deterministic)
 const shots = [];
 for (const w of ['pistol', 'carbine']) {
   const [mo, mi, ch] = reloadPlan[w];

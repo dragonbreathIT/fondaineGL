@@ -163,11 +163,16 @@ export class FirstPersonArms {
    * Pose the arms. `weaponRoot` = weapon world matrix; `eye` = eye position + rotation (for the shoulders);
    * `trigger` 0..1 blends the index finger to `indexPressed`. Pass `left: null` to hide the support hand.
    */
-  update(weaponRoot: Mat4, grips: WeaponGrips, eye: { position: ArrayLike<number>; rotation: Quat } | null, o: { trigger?: number; leftOverride?: HandPose | null; leftWeight?: number } = {}) {
+  update(weaponRoot: Mat4, grips: WeaponGrips, eye: { position: ArrayLike<number>; rotation: Quat } | null, o: { trigger?: number; leftOverride?: HandPose | null; leftWeight?: number; /** firing-hand thumb override (e.g. pressing the magazine release), blended by weight */ rightThumb?: { thumb: ThumbPose; weight: number } | null } = {}) {
     if (!this.visible) return;
     const right = grips.right;
     const idx = grips.indexPressed && (o.trigger ?? 0) > 0 ? blendFinger(right.fingers[0], grips.indexPressed, o.trigger ?? 0) : right.fingers[0];
-    const rp: HandPose = { ...right, fingers: [idx, right.fingers[1], right.fingers[2], right.fingers[3]] };
+    let thumb = right.thumb;
+    if (o.rightThumb && o.rightThumb.weight > 0) {
+      const w = Math.min(1, o.rightThumb.weight), t = o.rightThumb.thumb;
+      thumb = { dir: lerp3(right.thumb.dir, t.dir, w), bend: [right.thumb.bend[0] + (t.bend[0] - right.thumb.bend[0]) * w, right.thumb.bend[1] + (t.bend[1] - right.thumb.bend[1]) * w] };
+    }
+    const rp: HandPose = { ...right, fingers: [idx, right.fingers[1], right.fingers[2], right.fingers[3]], thumb };
     this.poseHand(this.sides[0], weaponRoot, rp, eye, this.options.shoulderRight);
     let left = grips.left ?? null;
     if (o.leftOverride && left) left = blendPose(left, o.leftOverride, o.leftWeight ?? 1);

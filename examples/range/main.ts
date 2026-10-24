@@ -3,7 +3,7 @@
 
 import { Engine, FPSController, Firearm, registerSurfaces, surfaceAlbedoTable, CameraRig, quat, DEG2RAD, vec3 } from '@fondaine/gl';
 import { ZONES, FOOTSTEPS } from '@fondaine/vorp';
-import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, AssetLibrary, blendPose, fitWeaponGrips, fitSupportPose } from '@fondaine/oaxis';
+import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, ThumbPose, AssetLibrary, blendPose, fitWeaponGrips, fitSupportPose } from '@fondaine/oaxis';
 import { buildRange } from './range';
 
 declare global { interface Window { __test?: Record<string, unknown>; engine?: Engine } }
@@ -206,11 +206,19 @@ engine.onLate.push(() => {
     if (ru < 0.62) return { pose: onSlide, w: 1 };
     return { pose: chargePose, w: 1 - smooth((ru - 0.62) / 0.38) };
   };
+  // firing-hand thumb presses the magazine release at the start of the reload (pistol: left side of the frame)
+  let rightThumb: { thumb: ThumbPose; weight: number } | null = null;
+  if (ph === 'magOut') {
+    const press = Math.sin(Math.PI * Math.min(1, u / 0.45));
+    rightThumb = { thumb: { dir: [g.right.thumb.dir[0] - 0.25, g.right.thumb.dir[1] - 0.45, g.right.thumb.dir[2] + 0.1], bend: [0.75, 0.55] }, weight: smooth(press) };
+  }
   if (ph && magPose && ax) {
     if (ph === 'magOut') {
-      leftWeight = smooth(u * 2.5);
-      leftOverride = shiftPose(magPose, ax, gun.magAnim.insertDistance * u + 0.22 * Math.sin(Math.PI * u));
+      // the support hand lets go and drops to the chest pouch (vest) while the empty magazine falls
+      leftWeight = smooth(u * 2.0);
+      leftOverride = shiftPose(magPose, ax, gun.magAnim.vestDistance * smooth((u - 0.2) / 0.8) + 0.06 * Math.sin(Math.PI * u));
     } else if (ph === 'magIn') {
+      // the fresh magazine rides in the hand from the vest to the magwell (incl. the fumble bounce)
       leftWeight = 1;
       leftOverride = shiftPose(magPose, ax, gun.anim.magOffset);
     } else if (ph === 'settle') {
@@ -230,7 +238,7 @@ engine.onLate.push(() => {
     const r = rackPose(gun.rackProgress);
     leftOverride = r.pose; leftWeight = r.w;
   }
-  arms.update(gun.rootWorld, g, { position: ctrl.eyePos, rotation: ctrl.eyeRot }, { trigger: gun.anim.trigger, leftOverride, leftWeight });
+  arms.update(gun.rootWorld, g, { position: ctrl.eyePos, rotation: ctrl.eyeRot }, { trigger: gun.anim.trigger, leftOverride, leftWeight, rightThumb });
 });
 
 (window as unknown as Record<string, unknown>).gun = gun;
