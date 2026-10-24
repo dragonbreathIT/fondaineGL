@@ -67,7 +67,7 @@ await setStatus('Loading physics and audio cores');
 registerSurfaces(engine.physics, engine.audio);
 await setStatus('Setting the weather: 18 °C, 1013 hPa, light wind');
 engine.physics.setAtmosphere(18, 1013.25, 0.55, [1.6, 0, 0.6]);
-engine.wind.set({ speed: 1.7, direction: [1.6, 0, 0.6], gustiness: 0.35 });
+engine.renderer.particles.wind.set([1.6, 0, 0.6]);
 await setStatus('Reading the asset manifest');
 const assets = params.get('scanned') === '0' ? undefined : await AssetLibrary.load(engine.renderer, '../../assets/');
 const range = await buildRange(engine, {
