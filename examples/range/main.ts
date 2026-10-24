@@ -65,6 +65,7 @@ engine.renderer.dev.onError = (m) => { (test.errors as string[]).push(m); consol
 // ------------------------------------------------------------------------ world
 await setStatus('Loading physics and audio cores');
 registerSurfaces(engine.physics, engine.audio);
+await setStatus('Setting the weather: 18 °C, 1013 hPa, light wind');
 engine.physics.setAtmosphere(18, 1013.25, 0.55, [1.6, 0, 0.6]);
 engine.renderer.particles.wind.set([1.6, 0, 0.6]);
 await setStatus('Reading the asset manifest');
@@ -72,6 +73,7 @@ const assets = params.get('scanned') === '0' ? undefined : await AssetLibrary.lo
 const range = await buildRange(engine, {
   assets,
   onStatus: setStatus, texSize, grassDensity: Number(params.get('grass') ?? 1), grassShadows: params.get('grassShadows') !== '0', trees: Number(params.get('trees') ?? 900) });
+await setStatus('Measuring the acoustics of the firing line');
 engine.audio.setZone(ZONES.outdoorRange);
 engine.audio.tempC = 18;
 
@@ -93,6 +95,7 @@ if (params.get('gi') !== '0') {
 
 // ------------------------------------------------------------------------ player + weapons (oAxis models)
 registerOAxisTuning(engine.tuning);
+await setStatus('Placing the shooter');
 const player = engine.createEntity('player', range.spawn);
 const ctrl = engine.addScript(player, new FPSController());
 await setStatus('Machining the carbine');
@@ -130,6 +133,7 @@ if (params.get('arms') !== '0') {
   try { if (rig) arms = new SkinnedArms(engine.renderer, rig).addTo(engine.scene); } catch (e) { console.warn('rigged arms unusable, using procedural hands', e); }
   arms ??= new FirstPersonArms(engine.renderer, { skin: 'glove' }).addTo(engine.scene);
 }
+await setStatus('Loading ammunition');
 // scanned vegetation LODs follow the camera
 engine.onUpdate.push(() => { for (const l of range.lods) l.update(engine.camera.position); });
 // credits for downloaded assets (CC-BY needs attribution)
@@ -305,6 +309,8 @@ document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement && !engine.devui.visible && !offscreen) overlay.style.display = 'flex';
 });
 // warm up: compile every pipeline and fill the TAA history before revealing the world
+await setStatus('Zeroing the sights');
+await frame();
 await setStatus('Compiling shaders');
 await frame();
 engine.step(1 / 60);

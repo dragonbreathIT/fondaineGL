@@ -42,6 +42,7 @@ export async function buildRange(engine: Engine, texSizeOrOpts: number | RangeOp
   const rnd = rng(31337);
 
   await status('Synthesising physically based materials');
+  // (each material below is a GPU compute dispatch; the loader line cycles through the stages)
   // ---------------------------------------------------------------- materials
   // scanned PBR texture sets (assets/manifest.json) replace the procedural ones slot by slot
   const lib = opts.assets;
