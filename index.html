@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>fondaine</title>
+<style>
+  body{margin:0;min-height:100vh;background:#0b0c0e;color:#d8dade;font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center}
+  main{max-width:760px;padding:40px 24px}
+  .logos{display:flex;gap:16px;margin-bottom:18px}
+  .logos img{width:72px;height:72px}
+  h1{margin:0 0 6px;font-size:30px}
+  p{color:#9ba0a8}
+  a.card{display:block;padding:16px 18px;margin:12px 0;border:1px solid #24272c;border-radius:10px;color:inherit;text-decoration:none;background:#111316}
+  a.card:hover{border-color:#f3b23a}
+  a.card b{color:#f3b23a}
+  code{background:#16181c;padding:1px 6px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+  <div class="logos"><img src="logo/fondainegl.svg" alt="fondaineGL"><img src="logo/vorp.svg" alt="vorp"></div>
+  <h1>fondaine</h1>
+  <p>Realism-first web game engine: <b>fondaineGL</b> (WebGPU renderer), <b>vorp</b> (physically based audio), Rust/WASM physics &amp; ballistics, TypeScript scripting.</p>
+  <a class="card" href="examples/range/"><b>Shooting range →</b><br>Carbine (1) and C15 compact pistol (2) with gloved hands, G7 ballistics, momentum recoil, slide lock-back, dropped mags. Path-traced GI baked at load, clouds with drifting shadows, wind-blown grass, treelines, depth of field. Add <code>?rig=bodycam</code> for the chest-camera look. Loading takes a while on purpose.</a>
+  <a class="card" href="examples/viewer/?model=pistol&hands=1&eye=1"><b>oAxis viewer →</b><br>Inspect the weapon models and hand grips up close. Drag to orbit, G exports a .glb.</a>
+  <a class="card" href="tools/vorp-lab/"><b>vorp-lab →</b><br>Waveform-level tuning of gunshots, steel ringing, casings, impacts and supersonic cracks with the same DSP the game uses.</a>
+</main>
+</body>
+</html>

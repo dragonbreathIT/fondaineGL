@@ -1,0 +1,52 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "@webgpu/types"
+    ],
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@fondaine/gl": [
+        "packages/fondaineGL/src/index.ts"
+      ],
+      "@fondaine/gl/*": [
+        "packages/fondaineGL/src/*"
+      ],
+      "@fondaine/vorp": [
+        "packages/vorp/src/index.ts"
+      ],
+      "@fondaine/vorp/*": [
+        "packages/vorp/src/*"
+      ],
+      "@fondaine/oaxis": [
+        "packages/oaxis/src/index.ts"
+      ],
+      "@fondaine/oaxis/*": [
+        "packages/oaxis/src/*"
+      ]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "examples/**/*.ts",
+    "tools/**/*.ts"
+  ],
+  "exclude": [
+    "**/test/**",
+    "**/__tests__/**",
+    "node_modules",
+    "dist"
+  ]
+}

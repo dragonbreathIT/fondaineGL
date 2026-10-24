@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>vorp-lab</title>
+<style>
+  :root{--bg:#0b0c0e;--panel:#121417;--line:#24272c;--text:#d8dade;--muted:#8e939c;--accent:#f3b23a}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.4 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{display:grid;grid-template-columns:400px 1fr;grid-template-rows:auto 1fr;height:100vh}
+  header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)}
+  header b{font-size:15px}header .logo{color:var(--accent);font-weight:800}
+  header .muted{color:var(--muted)}
+  aside{overflow:auto;border-right:1px solid var(--line);padding:12px 14px 40px}
+  main{display:grid;grid-template-rows:200px 200px 1fr auto;gap:10px;padding:12px;min-height:0}
+  canvas{width:100%;height:100%;border:1px solid var(--line);border-radius:6px;display:block;min-height:0}
+  h3{margin:14px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .row{display:grid;grid-template-columns:150px 1fr 70px;gap:8px;align-items:center;padding:2px 0}
+  .row label{color:#b9bcc3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row label i{color:var(--muted);font-style:normal;font-size:11px}
+  .row input[type=range]{width:100%;accent-color:var(--accent)}
+  .row input[type=number],select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:2px 4px;font:inherit;width:100%}
+  .help{grid-column:1/-1;color:#6f747d;font-size:11px;margin:-2px 0 4px}
+  .bar{display:flex;gap:8px;flex-wrap:wrap}
+  button{background:#1d2025;color:var(--text);border:1px solid #30343b;border-radius:5px;padding:6px 12px;cursor:pointer;font:inherit}
+  button.primary{background:var(--accent);color:#111;border-color:var(--accent);font-weight:600}
+  #info{color:var(--muted);font:12px ui-monospace,Menlo,Consolas,monospace}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header><span class="logo">vorp</span><b>lab</b><span class="muted">physically based source tuning · same DSP as the game · Space = play</span></header>
+<aside>
+  <h3>Source</h3>
+  <div class="row"><label>Type</label><select id="mode">
+    <option value="gunshot">Gunshot (muzzle blast + action)</option>
+    <option value="plate">Steel plate hit (modal)</option>
+    <option value="casing">Brass casing drop (modal)</option>
+    <option value="impact">Bullet impact (surface)</option>
+    <option value="crack">Supersonic crack (N-wave)</option>
+  </select><span></span></div>
+  <div class="row" id="presetRow"><label>Preset</label><select id="preset"></select><span></span></div>
+  <div id="params"></div>
+  <h3>Listener &amp; environment</h3>
+  <div class="row"><label>Environment</label><select id="zone"></select><span></span></div>
+  <div id="scene"></div>
+</aside>
+<main>
+  <canvas id="dry"></canvas>
+  <canvas id="out"></canvas>
+  <canvas id="spec"></canvas>
+  <div>
+    <div class="bar">
+      <button class="primary" id="play">▶ Play</button>
+      <button id="wav">Export WAV</button>
+      <button id="save">Save preset JSON</button>
+      <button id="load">Load preset JSON</button>
+    </div>
+    <p id="info">loading…</p>
+  </div>
+</main>
+<script type="module" src="./lab.js"></script>
+</body>
+</html>
