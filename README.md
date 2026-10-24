@@ -65,7 +65,7 @@ Rust: install from https://rustup.rs. The build script runs `rustup target add w
 | Mouse / WASD / Shift / C / Space | look / move / sprint / crouch / jump |
 | LMB / RMB | fire / aim down sights |
 | 1 / 2 | carbine / C15 compact pistol (draw animation) |
-| R | reload |
+| R | reload: the gun comes up to the chest, rolled so you see the magwell; the support hand drops the magazine, seats a fresh one and, after an empty reload, **racks the slide** (pistol: overhand on the rear serrations) or **charges the rifle** (charging handle, or the bolt catch when the bolt is locked back) |
 | X | fire selector: **Safe → Semi → Auto** (lever animates, detent click; Safe gives a dead trigger click) |
 | Q / E | lean |
 | Alt while aiming | hold breath (less sway for ~4 s) |
@@ -81,6 +81,10 @@ URL options: `?rig=bodycam`, `?weapon=pistol`, `?sun=12&az=250` (low sun, golden
 ### Range URL parameters
 
 `examples/range/?rig=bodycam` (or `eyes`) · `sun=38&az=145` sun elevation/azimuth · `tex=1024` procedural texture size · `debug=N` render debug view (1 normals, 2 AO, 3 velocity, 4 depth, 5 luminance false-colour, 6 raw HDR, 7 sky visibility, 8 ambient-only, 9 direct-only; also in F1 → AO & AA) · `demo=1&yaw=0&pitch=-1&ads=1&shots=3&fireAt=20` scripted capture.
+
+Headless / scripted capture (`offscreen=1&frames=N` renders N frames off-screen, then blits the result and sets `window.__test.captured`): `dt=0.0167` simulated seconds per frame (deterministic, default 1/60) · `taa=0` no temporal AA (a sharp image after 3–4 frames; TAA needs ~20 to converge) · `empty=1` start with empty chambers (slides locked back) · `reloadAt=F&scrub=S` start a reload at frame F and jump its clock to S seconds · `rackAt=F` rack the action at frame F.
+
+`tools/capture/capture.mjs <url> <out.png> [timeoutMs]` drives the above with Playwright + SwiftShader WebGPU (works in a sandbox without a GPU, ~90 s per shot with `trees=0&grass=0&gi=0&tex=256`); env `VIEW=960x540`, `EVAL=<js>` prints an expression evaluated on the page (e.g. `window.gun.reloadPhase`).
 
 ## What "realism" means here and where it comes from
 

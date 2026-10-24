@@ -3,7 +3,7 @@
 
 import { Engine, FPSController, Firearm, registerSurfaces, surfaceAlbedoTable, CameraRig, quat, DEG2RAD, vec3 } from '@fondaine/gl';
 import { ZONES, FOOTSTEPS } from '@fondaine/vorp';
-import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, AssetLibrary } from '@fondaine/oaxis';
+import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, AssetLibrary, blendPose } from '@fondaine/oaxis';
 import { buildRange } from './range';
 
 declare global { interface Window { __test?: Record<string, unknown>; engine?: Engine } }
@@ -54,6 +54,7 @@ const t0Load = performance.now();
 setStatus('Starting the engine');
 const engine: Engine = await Engine.create({ canvas, baseUrl: '../../', title: 'fondaine · range', offscreen }).catch((e) => fail(String(e)));
 if (params.get('debug')) engine.renderer.settings.debugView = Number(params.get('debug'));
+if (params.get('taa') === '0') engine.renderer.settings.taa.enabled = false; // headless single-frame captures
 window.engine = engine;
 const test: Record<string, unknown> = { frames: 0, errors: [] as string[], done: false };
 window.__test = test;
@@ -135,29 +136,77 @@ if (assets && !assets.empty) {
   c.textContent = 'Scanned assets: ' + assets.credits().map((x) => `${x.title ?? x.slot}${x.author ? ' by ' + x.author : ''} (${x.license})`).join(' · ');
   overlay.querySelector('.card')?.appendChild(c);
 }
-const gripsFor = new Map<Firearm, WeaponGrips | undefined>([[weapons[0], carbine.grips], [weapons[1], pistol.grips]]);
+/** Weapon grips plus the optional support-hand poses for racking (over the slide) and slapping the bolt catch. */
+type Grips = WeaponGrips & { leftOnCharge?: HandPose; leftOnBoltRelease?: HandPose };
+const gripsFor = new Map<Firearm, Grips | undefined>([[weapons[0], carbine.grips], [weapons[1], pistol.grips]]);
 const smooth = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 const shiftPose = (p: HandPose, ax: ArrayLike<number>, d: number): HandPose => ({ ...p, position: [p.position[0] + ax[0] * d, p.position[1] + ax[1] * d, p.position[2] + ax[2] * d] });
+/** Default racking pose when the weapon's grips don't author one: overhand on the slide (pistol) or two fingers hooked in the charging-handle latch (rifle). */
+function defaultChargePose(w: Firearm): HandPose {
+  const gp = w.chargeGrip;
+  if (w.model.charge) {
+    return {
+      position: [gp[0] - 0.062, gp[1] + 0.03, gp[2] - 0.012], fingerDir: [0.82, -0.5, 0.28], dorsal: [0.2, 0.9, -0.3],
+      fingers: [{ curl: [0.9, 1.25, 0.9] }, { curl: [0.95, 1.3, 0.9] }, { curl: [1.25, 1.4, 1.0] }, { curl: [1.3, 1.4, 1.0] }],
+      thumb: { dir: [0.2, -0.3, -0.93], bend: [0.25, 0.3] },
+    };
+  }
+  return {
+    position: [gp[0] - 0.066, gp[1] + 0.026, gp[2] + 0.004], fingerDir: [0.93, -0.36, 0.05], dorsal: [0.3, 0.85, 0.15],
+    fingers: [{ curl: [1.05, 1.25, 0.7] }, { curl: [1.1, 1.3, 0.7] }, { curl: [1.1, 1.3, 0.7] }, { curl: [1.1, 1.25, 0.7] }],
+    thumb: { dir: [0.25, -0.55, -0.8], bend: [0.3, 0.35] },
+  };
+}
+function defaultBoltReleasePose(w: Firearm): HandPose {
+  const e = w.model.ejectionPort;
+  return {
+    position: [-e[0] - 0.045, e[1] - 0.02, e[2] + 0.055], fingerDir: [0.75, 0.25, -0.61], dorsal: [-0.6, 0.75, 0.0],
+    fingers: [{ curl: [0.35, 0.5, 0.3] }, { curl: [0.5, 0.6, 0.3] }, { curl: [0.9, 1.0, 0.5] }, { curl: [1.1, 1.1, 0.6] }],
+    thumb: { dir: [0.1, 0.5, -0.86], bend: [0.3, 0.3] },
+  };
+}
 engine.onLate.push(() => {
   if (!arms) return;
   const g = gripsFor.get(gun);
   if (!g || gun.holstered) { arms.setVisible(false); return; }
   arms.setVisible(true);
-  // reload choreography: support hand leaves the grip, fetches a magazine, rides it into the magwell, returns
+  // reload choreography: the support hand leaves the grip, fetches a magazine, rides it into the magwell, then
+  // either racks the slide / charging handle (empty reload), slaps the bolt catch, or settles back on the grip
   let leftOverride: HandPose | null = null, leftWeight = 0;
-  const t = gun.reloadTime, r = gun.spec.reload, ax = gun.model.magAxis;
-  if (t >= 0 && g.leftOnMagazine && ax) {
-    if (t < r.magOut) {
-      const u = t / r.magOut;
+  const ph = gun.reloadPhase, u = gun.phaseT, ax = gun.model.magAxis;
+  const magPose = g.leftOnMagazine;
+  const chargePose = g.leftOnCharge ?? defaultChargePose(gun);
+  const pull = gun.chargePullDir;
+  const rackPose = (ru: number): { pose: HandPose; w: number } => {
+    // 0–0.3 travel to the action, 0.3–0.55 hold + pull (hand follows the slide), 0.55–1 let go and return
+    const onSlide = shiftPose(chargePose, pull, gun.rackDisplacement);
+    if (ru < 0.3) return { pose: onSlide, w: smooth(ru / 0.3) };
+    if (ru < 0.62) return { pose: onSlide, w: 1 };
+    return { pose: chargePose, w: 1 - smooth((ru - 0.62) / 0.38) };
+  };
+  if (ph && magPose && ax) {
+    if (ph === 'magOut') {
       leftWeight = smooth(u * 2.5);
-      leftOverride = shiftPose(g.leftOnMagazine, ax, gun.magAnim.insertDistance * u + 0.22 * Math.sin(Math.PI * u));
-    } else if (t < r.magOut + r.magIn) {
+      leftOverride = shiftPose(magPose, ax, gun.magAnim.insertDistance * u + 0.22 * Math.sin(Math.PI * u));
+    } else if (ph === 'magIn') {
       leftWeight = 1;
-      leftOverride = shiftPose(g.leftOnMagazine, ax, gun.anim.magOffset);
-    } else {
-      leftWeight = 1 - smooth((t - r.magOut - r.magIn) / r.boltRelease);
-      leftOverride = g.leftOnMagazine;
+      leftOverride = shiftPose(magPose, ax, gun.anim.magOffset);
+    } else if (ph === 'settle') {
+      leftWeight = 1 - smooth(u);
+      leftOverride = magPose;
+    } else if (ph === 'charge') {
+      const r = rackPose(u);
+      // the hand comes straight from the magazine to the slide
+      leftOverride = u < 0.3 ? blendPose(magPose, r.pose, r.w) : r.pose;
+      leftWeight = u < 0.3 ? 1 : r.w;
+    } else if (ph === 'release') {
+      const bp = g.leftOnBoltRelease ?? defaultBoltReleasePose(gun);
+      if (u < 0.5) { leftOverride = blendPose(magPose, bp, smooth(u / 0.45)); leftWeight = 1; }
+      else { leftOverride = bp; leftWeight = 1 - smooth((u - 0.55) / 0.45); }
     }
+  } else if (gun.rackProgress >= 0) {
+    const r = rackPose(gun.rackProgress);
+    leftOverride = r.pose; leftWeight = r.w;
   }
   arms.update(gun.rootWorld, g, { position: ctrl.eyePos, rotation: ctrl.eyeRot }, { trigger: gun.anim.trigger, leftOverride, leftWeight });
 });
@@ -261,8 +310,17 @@ if (params.get('demo') === '1' || offscreen) {
   const shots = Number(params.get('shots') ?? 0);
   const fireAt = Number(params.get('fireAt') ?? 20);
   const frames = Number(params.get('frames') ?? 60);
+  // deterministic time for headless capture: every frame advances `dt` seconds however long it takes to render
+  if (offscreen) engine.maxFrameTime = Number(params.get('dt') ?? 1 / 60);
+  // reloadAt=<frame>&scrub=<s>: start a reload (from an empty chamber with empty=1) and jump its clock; rackAt=<frame>
+  const reloadAt = params.has('reloadAt') ? Number(params.get('reloadAt')) : -1;
+  const rackAt = params.has('rackAt') ? Number(params.get('rackAt')) : -1;
+  const scrub = Number(params.get('scrub') ?? 0);
+  if (params.get('empty') === '1') for (const w of weapons) { w.rounds = 0; w.chambered = false; if (w.spec.action?.lockOpenOnEmpty) w.anim.lockedOpen = true; }
   engine.onUpdate.push(() => {
     const f = engine.frame;
+    if (f === reloadAt) { gun.reload(); gun.scrubReload(scrub); }
+    if (f === rackAt) gun.rack();
     gun.triggerOverride = shots > 0 && f >= fireAt && gun.shotsFired < shots;
     if (f >= frames && !test.done) {
       test.done = true;

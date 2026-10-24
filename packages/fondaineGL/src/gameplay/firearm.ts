@@ -77,7 +77,19 @@ export interface FirearmSpec {
     /** How much sustained fire degrades control (climb + horizontal wander per shot). */
     autoClimb?: number;
   };
-  reload: { magOut: number; magIn: number; boltRelease: number };
+  /**
+   * Reload phase durations (s). magOut: release + drop the magazine; magIn: fetch + seat the new one;
+   * boltRelease: send the bolt home from the catch (AR) or settle the support hand after a tactical reload;
+   * charge: rack the slide / pull the charging handle when the chamber is empty and nothing holds the action open
+   * (default 0.6).
+   */
+  reload: { magOut: number; magIn: number; boltRelease: number; charge?: number };
+  /**
+   * Where the weapon goes during a reload, relative to the hip pose (metres / radians): lifted and pulled
+   * towards the chest, muzzle up, rolled so the magwell and the ejection port face the eye. Defaults differ for
+   * pistols (rolled ~35°, high) and rifles (rolled ~25°, lower).
+   */
+  reloadPose?: { lift: number; back: number; pitch: number; yaw: number; roll: number; /** extra roll while racking */ chargeRoll: number };
   audio: GunshotPreset;
   flash: { kelvin: number; luminance: number; sizeM: number; lightCandela: number; sidePorts: boolean; smoke: number };
   ejection: { speed: number; up: number; back: number; spinRad: number };
@@ -105,7 +117,7 @@ export interface FirearmSpec {
 
 export interface FirearmModel {
   /** Parts in rifle-local space (+x right, +y up, −z towards the muzzle). */
-  parts: { object: RenderObject; local: Mat4; magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean }[];
+  parts: { object: RenderObject; local: Mat4; magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean; charge?: boolean }[];
   muzzle: Vec3;
   ejectionPort: Vec3;
   rearSight: Vec3;
@@ -121,7 +133,18 @@ export interface FirearmModel {
   triggerTravelM?: number;
   /** Fire-selector lever: parts flagged `selector` rotate about `axis` through `pivot` to the angle of the mode. */
   selector?: { pivot: [number, number, number]; axis: [number, number, number]; angles: Partial<Record<FireMode, number>> };
+  /**
+   * Manual charging (racking) of the action, used to finish a reload from empty and to chamber the first round.
+   * `grip` is where the support hand grabs (weapon space): the rear slide serrations on a pistol, the charging-handle
+   * latch on an AR. Parts flagged `charge` (a non-reciprocating charging handle) translate +z by the rack travel
+   * together with the `bolt` parts; on a pistol there is no `charge` part and the slide (`bolt`) is what moves.
+   * `travelM` defaults to spec.action.travelM. `release`: 'slingshot' lets go of the handle (spring return);
+   * 'boltRelease' = the support hand slaps the bolt catch instead when the bolt is already locked open.
+   */
+  charge?: { grip: Vec3; travelM?: number; release?: 'slingshot' | 'boltRelease'; /** direction the hand pulls, weapon space (default +z) */ pullDir?: Vec3 };
 }
+
+export type ReloadPhase = 'magOut' | 'magIn' | 'charge' | 'release' | 'settle';
 
 interface Casing { body: Body; obj: RenderObject; born: number; lastSound: number; settled: boolean }
 interface DroppedMag { body: Body; objs: RenderObject[]; lastSound: number }
@@ -146,7 +169,10 @@ export class Firearm extends Behaviour {
   /** Max dropped magazines kept in the world. */
   maxDroppedMags = 8;
   /** Action animation state, readable by scripts. */
-  readonly anim = { slide: 0, magOffset: 0, magVisible: true, trigger: 0, lockedOpen: false, equip: 1 };
+  readonly anim = { slide: 0, magOffset: 0, magVisible: true, trigger: 0, lockedOpen: false, equip: 1, /** rearward travel of `charge` parts (m), only while racking */ charge: 0 };
+  /** Current reload phase (null when not reloading) and normalised time 0..1 within it, for hand choreography. */
+  reloadPhase: ReloadPhase | null = null;
+  phaseT = 0;
   /** Magazine drop/insert speeds (oAxis tuning). */
   readonly magAnim = { ejectSpeed: 1.2, insertDistance: 0.14, seatFraction: 0.7 };
 
@@ -175,6 +201,12 @@ export class Firearm extends Behaviour {
   private muzzleVelocity: number;
   private slideT = 1e9;        // seconds since the last cycle started
   private releaseT = -1;       // seconds since slide release (−1 = none)
+  private releaseFrom = 0;     // slide position the release started from (m)
+  private rackPull = -1;       // slide position imposed by the racking hand (m), −1 = hand off
+  private rackRelease = false; // charging handle riding home after a rack
+  private reloadNeedsCharge = false;
+  private rackT = -1;          // seconds into a stand-alone rack (−1 = none)
+  private rackSoundDone = 0;
   private equipT = 1e9;
   private droppedMags: DroppedMag[] = [];
   private magByBody = new Map<number, DroppedMag>();
@@ -249,20 +281,89 @@ export class Firearm extends Behaviour {
         .bool(ga, a, 'lockOpenOnEmpty', { label: 'Lock open on empty' });
     }
     const re = this.spec.reload as unknown as Record<string, number>;
+    if (re.charge === undefined) re.charge = 0.6;
+    this.spec.reloadPose ??= this.spec.action && this.spec.eyeRelief > 0.3
+      ? { lift: 0.07, back: 0.09, pitch: 0.42, yaw: 0.28, roll: 0.62, chargeRoll: 0.35 }
+      : { lift: 0.035, back: 0.05, pitch: 0.16, yaw: 0.32, roll: 0.42, chargeRoll: 0.2 };
+    const rp = this.spec.reloadPose as unknown as Record<string, number>;
+    ta.number(ga, rp, 'lift', { label: 'Reload pose: lift', min: -0.1, max: 0.2, step: 0.001, unit: 'm' })
+      .number(ga, rp, 'back', { label: 'Reload pose: pull back', min: 0, max: 0.25, step: 0.001, unit: 'm' })
+      .number(ga, rp, 'pitch', { label: 'Reload pose: muzzle up', min: -0.5, max: 1, step: 0.01, unit: 'rad' })
+      .number(ga, rp, 'yaw', { label: 'Reload pose: yaw', min: -1, max: 1, step: 0.01, unit: 'rad' })
+      .number(ga, rp, 'roll', { label: 'Reload pose: roll', min: -1.2, max: 1.2, step: 0.01, unit: 'rad' })
+      .number(ga, rp, 'chargeRoll', { label: 'Rack: extra roll', min: -1, max: 1, step: 0.01, unit: 'rad' });
     ta.number(ga, re, 'magOut', { label: 'Reload: mag out', min: 0.05, max: 3, step: 0.01, unit: 's' })
       .number(ga, re, 'magIn', { label: 'Reload: mag in', min: 0.05, max: 3, step: 0.01, unit: 's' })
       .number(ga, re, 'boltRelease', { label: 'Reload: release', min: 0.05, max: 2, step: 0.01, unit: 's' })
+      .number(ga, re, 'charge', { label: 'Reload: rack', min: 0.2, max: 2, step: 0.01, unit: 's', help: 'Racking the slide / charging handle after an empty reload.' })
       .number(ga, this.magAnim, 'ejectSpeed', { label: 'Mag eject speed', min: 0, max: 5, step: 0.05, unit: 'm/s' });
   }
 
   /** Seconds into the current reload (−1 when not reloading). */
   get reloadTime(): number { return this.reloadT; }
+  /** True while racking the slide / charging handle (reload charge phase or a stand-alone rack). */
+  get racking(): boolean { return this.reloadPhase === 'charge' || this.rackT >= 0; }
+  /** 0..1 through the current rack cycle (−1 when not racking): hand reaches 0–0.3, pulls 0.3–0.55, lets go, returns. */
+  get rackProgress(): number {
+    if (this.reloadPhase === 'charge') return this.phaseT;
+    if (this.rackT >= 0) return Math.min(1, this.rackT / (this.spec.reload.charge ?? 0.6));
+    return -1;
+  }
+  /** Current rearward displacement of the part the racking hand holds (m). */
+  get rackDisplacement(): number { return this.model.charge ? this.anim.charge : this.anim.slide; }
+  /** Weapon-space point the support hand grabs to rack the action (model.charge.grip or a slide default). */
+  get chargeGrip(): Vec3 {
+    if (this.model.charge) return this.model.charge.grip;
+    const r = this.model.rearSight;
+    return vec3.create(r[0], r[1] - 0.005, r[2] - 0.014);
+  }
+  /** Rack travel (m): model.charge.travelM, else the action travel. */
+  get chargeTravel(): number { return this.model.charge?.travelM ?? this.spec.action?.travelM ?? 0; }
+  /** Direction the support hand pulls (weapon space, unit). */
+  get chargePullDir(): Vec3 { return this.model.charge?.pullDir ?? vec3.create(0, 0, 1); }
+
+  /** Scripted reload (same as pressing R). Returns false if it cannot start now. */
+  reload(): boolean {
+    if (this.holstered || this.reloadT >= 0 || this.anim.equip < 1 || this.rounds >= this.spec.magazineCapacity) return false;
+    this.startReload();
+    return true;
+  }
+
+  /** Scripted rack of the action (chambers a round from the magazine; drops a live one if chambered). */
+  rack(): boolean {
+    if (this.holstered || this.reloadT >= 0 || this.rackT >= 0 || !this.spec.action) return false;
+    this.rackT = 0;
+    this.rackSoundDone = 0;
+    return true;
+  }
+
+  /** Jump the reload clock (tests / headless capture of a chosen moment). */
+  scrubReload(t: number) { if (this.reloadT >= 0) this.reloadT = Math.max(0, t); }
+
+  /** Phase boundaries of the current reload (s), in order. */
+  private reloadPlan(): { phase: ReloadPhase; start: number; end: number }[] {
+    const r = this.spec.reload;
+    const plan: { phase: ReloadPhase; start: number; end: number }[] = [];
+    let t = 0;
+    const push = (phase: ReloadPhase, d: number) => { plan.push({ phase, start: t, end: t + d }); t += d; };
+    push('magOut', r.magOut);
+    push('magIn', r.magIn);
+    if (this.reloadNeedsCharge) {
+      const boltCatch = this.anim.lockedOpen && (this.model.charge?.release ?? 'slingshot') === 'boltRelease';
+      if (boltCatch || !this.spec.action) push('release', r.boltRelease); else push('charge', r.charge ?? 0.6);
+    } else push('settle', r.boltRelease);
+    return plan;
+  }
+  private reloadTotal(): number { const p = this.reloadPlan(); return p[p.length - 1].end; }
 
   /** Put the weapon away: hidden, inputs ignored. Brass and dropped magazines keep simulating. */
   holster() {
     this.holstered = true;
     this.renderer.settings.dof.overrideWeight = 0;
     this.reloadT = -1;
+    this.reloadPhase = null;
+    this.rackT = -1;
+    this.rackPull = -1;
     this.ads = 0;
     this.flashLight.enabled = false;
     for (const p of this.model.parts) p.object.visible = false;
@@ -299,7 +400,7 @@ export class Firearm extends Behaviour {
     this.equipT += dt;
     const drawTime = s.drawTime ?? 0.5;
     this.anim.equip = Math.min(1, this.equipT / drawTime);
-    const canAct = this.reloadT < 0 && this.anim.equip >= 1;
+    const canAct = this.reloadT < 0 && this.rackT < 0 && this.anim.equip >= 1;
     // muzzle-flash light lives for the frame it was fired in
     if (this.flashLife > 0) { this.flashLife -= dt; if (this.flashLife <= 0) this.flashLight.enabled = false; }
     // ---- ADS
@@ -318,6 +419,7 @@ export class Firearm extends Behaviour {
     // ---- reload
     if (inp.actionPressed('reload') && canAct && this.rounds < s.magazineCapacity) this.startReload();
     if (this.reloadT >= 0) this.updateReload(dt);
+    if (this.rackT >= 0) this.updateRack(dt);
     // ---- trigger
     this.cooldown -= dt;
     const fire = this.triggerOverride !== null ? this.triggerOverride : inp.action('fire') && (inp.locked || !!inp.gamepad);
@@ -387,11 +489,14 @@ export class Firearm extends Behaviour {
       const lockX = a.travelM * (a.lockFraction ?? 0.92);
       const ease = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
       if (this.releaseT >= 0) {
-        // slide release: spring drives it home from the catch
+        // slide release: spring drives it home from the catch / from the hand
         this.releaseT += dt;
         const u = this.releaseT / tr;
-        A.slide = lockX * (1 - ease(u) ** 0.7);
+        A.slide = this.releaseFrom * (1 - ease(u) ** 0.7);
         if (u >= 1) { this.releaseT = -1; A.slide = 0; }
+      } else if (this.rackPull >= 0) {
+        // the support hand holds the slide / charging handle
+        A.slide = Math.max(this.rackPull, A.lockedOpen ? lockX : 0);
       } else if (this.slideT < tb) {
         A.slide = a.travelM * Math.sin((this.slideT / tb) * Math.PI / 2);
       } else if (this.slideT < tb + dwell) {
@@ -402,6 +507,9 @@ export class Firearm extends Behaviour {
         A.slide = a.travelM * (1 - ease((this.slideT - tb - dwell) / tr));
       }
     }
+    // a non-reciprocating charging handle only moves while a hand is on it (and rides home with the bolt after)
+    A.charge = this.rackPull >= 0 || this.rackRelease ? A.slide : 0;
+    if (this.rackRelease && A.slide <= 0) this.rackRelease = false;
     // magazine: dropped (physics) during mag-out, inserted along the magwell axis during mag-in
     A.magOffset = 0; A.magVisible = true;
     if (this.reloadT >= 0 && this.model.magAxis) {
@@ -442,7 +550,7 @@ export class Firearm extends Behaviour {
     const a = this.ads * this.ads * (3 - 2 * this.ads);
     const pos = vec3.lerp(vec3.create(), hip, adsPos, a);
     // recoil push-back along the bore + reload lowering
-    const back = vec3.transformQuat(vec3.create(), [0, -reloadQ.drop - this.equipDrop() - 0.01 * sw, this.back.z + this.kick.z], rotGun);
+    const back = vec3.transformQuat(vec3.create(), [0, reloadQ.lift - this.equipDrop() - 0.01 * sw, this.back.z + this.kick.z + reloadQ.back], rotGun);
     vec3.add(pos, pos, back);
     // movement bob (weapon lags the head a little)
     const bob = Math.sin(this.engine.time * 7) * 0.003 * ctrl.moving * (1 - a);
@@ -453,9 +561,10 @@ export class Firearm extends Behaviour {
     for (const p of this.model.parts) {
       const M = p.object.transform as Mat4;
       if (p.bolt && A.slide !== 0) mat4.translate(M, this.rootWorld, [0, 0, A.slide]);
+      else if (p.charge && A.charge !== 0) mat4.translate(M, this.rootWorld, [0, 0, A.charge]);
       else if (p.magazine && ax && A.magOffset !== 0) mat4.translate(M, this.rootWorld, [ax[0] * A.magOffset, ax[1] * A.magOffset, ax[2] * A.magOffset]);
       else if (p.trigger && tt !== 0) mat4.translate(M, this.rootWorld, [0, 0, tt]);
-      else if (!p.bolt || A.slide === 0) mat4.copy(M, this.rootWorld);
+      else if ((!p.bolt || A.slide === 0) && (!p.charge || A.charge === 0)) mat4.copy(M, this.rootWorld);
       if (p.selector && this.model.selector) {
         const sel = this.model.selector;
         const q = quat.setAxisAngle(quat.create(), sel.axis, this.selectorAngle);
@@ -472,16 +581,79 @@ export class Firearm extends Behaviour {
 
   private equipDrop(): number { const e = 1 - this.anim.equip; return 0.28 * e * e * (3 - 2 * e); }
 
-  private reloadPose(): { q: Quat; drop: number } {
-    if (this.reloadT < 0) return { q: quat.create(), drop: 0 };
-    const s = this.spec.reload, total = s.magOut + s.magIn + s.boltRelease;
-    const t = Math.min(1, this.reloadT / total);
-    const env = Math.sin(t * Math.PI);
-    return { q: quat.fromEuler(quat.create(), -0.25 * env, 0.15 * env, -0.55 * env), drop: 0.07 * env };
+  /** Reload / rack pose offset: the gun comes up to the chest, rolled so the magwell and the action face the eye. */
+  private reloadPose(): { q: Quat; lift: number; back: number } {
+    const P = this.spec.reloadPose!;
+    const sm = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+    let env = 0, rack = 0;
+    if (this.reloadT >= 0) {
+      const total = this.reloadTotal();
+      env = sm(this.reloadT / 0.28) * sm((total - this.reloadT) / 0.32);
+      if (this.reloadPhase === 'charge' || this.reloadPhase === 'release') rack = Math.sin(Math.PI * Math.min(1, this.phaseT)) * env;
+    } else if (this.rackT >= 0) {
+      const d = this.spec.reload.charge ?? 0.6;
+      env = sm(this.rackT / 0.2) * sm((d - this.rackT) / 0.25) * 0.6;
+      rack = Math.sin(Math.PI * Math.min(1, this.rackT / d));
+    }
+    if (env === 0) return { q: quat.create(), lift: 0, back: 0 };
+    const q = quat.fromEuler(quat.create(), P.pitch * env, P.yaw * env, P.roll * env + P.chargeRoll * rack);
+    return { q, lift: P.lift * env, back: P.back * env };
+  }
+
+  /** Stand-alone rack (no reload): hand to the action, pull, let go. */
+  private updateRack(dt: number) {
+    const d = this.spec.reload.charge ?? 0.6;
+    this.rackT += dt;
+    this.rackCycle(this.rackT / d, this.rackT - dt < 0);
+    if (this.rackT >= d) { this.rackT = -1; this.rackPull = -1; }
+  }
+
+  /**
+   * One rack cycle over u = 0..1: 0–0.3 the hand travels to the slide/handle, 0.3–0.55 it pulls the action fully
+   * back (with the slide rasp), 0.55 lets go (spring slams it home, chambering a round), then the hand returns.
+   */
+  private rackCycle(u: number, first: boolean) {
+    const travel = this.chargeTravel;
+    const ease = (x: number) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+    const port = this.local(this.model.ejectionPort);
+    if (first) this.rackSoundDone = 0;
+    if (u < 0.3) { this.rackPull = -1; return; }
+    if (u < 0.55) {
+      const k = ease((u - 0.3) / 0.25);
+      this.rackPull = travel * (0.08 + 0.92 * k);
+      if (this.rackSoundDone < 1) {
+        this.rackSoundDone = 1;
+        // slide rasp along the rails + the hand slapping onto the serrations
+        this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 68, attackMs: 4, decayMs: 110, hpHz: 700, lpHz: 7500, thumpDb: -34 }, port));
+        this.audio.modal(receiverModes(1.25), [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }], port, 0.6);
+      }
+      if (k > 0.97 && this.rackSoundDone < 2) {
+        this.rackSoundDone = 2;
+        // slide / carrier hits its rear stop; a chambered round is extracted and flung out
+        this.audio.modal(receiverModes(1.1), [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }], port, 0.9);
+        if (this.chambered) { this.ejectCasing(); this.chambered = false; }
+      }
+      return;
+    }
+    if (this.rackSoundDone < 3) {
+      this.rackSoundDone = 3;
+      this.rackPull = -1;
+      this.releaseFrom = Math.max(this.anim.slide, travel);
+      this.releaseT = 0;
+      this.anim.lockedOpen = false;
+      this.rackRelease = true;
+      this.audio.modal(receiverModes(1), [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }], port, 1.1); // slams home
+      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 62, attackMs: 2, decayMs: 70, hpHz: 900, lpHz: 9000, thumpDb: -30 }, port, { delayMs: 8 }));
+      if (this.rounds > 0 && !this.chambered) { this.rounds--; this.chambered = true; }
+    }
   }
 
   private startReload() {
     this.reloadT = 0;
+    this.reloadNeedsCharge = !this.chambered;
+    this.reloadPhase = 'magOut';
+    this.phaseT = 0;
+    this.rackSoundDone = 0;
     this.magDropped = false;
     if (this.model.magBox) this.dropMagazine();
     const port = this.local(this.model.ejectionPort);
@@ -495,20 +667,37 @@ export class Firearm extends Behaviour {
     this.reloadT += dt;
     const port = this.local(this.model.ejectionPort);
     const cross = (t: number) => prev < t && this.reloadT >= t;
+    const plan = this.reloadPlan();
+    const cur = plan.find((p) => this.reloadT < p.end) ?? plan[plan.length - 1];
+    const prevPhase = this.reloadPhase;
+    this.reloadPhase = cur.phase;
+    this.phaseT = Math.min(1, Math.max(0, (this.reloadT - cur.start) / Math.max(1e-6, cur.end - cur.start)));
     if (cross(s.magOut + s.magIn * 0.7)) {
       // magazine seats: two-stage click
       this.audio.modal(receiverModes(1.15), [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }], port, 0.9);
-    }
-    if (cross(s.magOut + s.magIn + s.boltRelease * 0.5) && this.anim.lockedOpen) { this.anim.lockedOpen = false; this.releaseT = 0; }
-    if (cross(s.magOut + s.magIn + s.boltRelease * 0.5) && !this.chambered) {
-      this.audio.modal(receiverModes(1), [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }], port, 1.1); // bolt slams home
-    }
-    if (this.reloadT >= s.magOut + s.magIn + s.boltRelease) {
-      const wasChambered = this.chambered;
+      // a fresh magazine goes in: the follower now feeds the action
       this.rounds = this.spec.magazineCapacity;
-      if (!wasChambered) { this.rounds--; }
-      this.chambered = true;
+    }
+    if (cur.phase === 'release') {
+      // bolt catch slapped at mid-phase: the carrier flies home and strips the first round
+      if (this.phaseT >= 0.5 && this.anim.lockedOpen) {
+        this.anim.lockedOpen = false;
+        this.releaseFrom = this.anim.slide;
+        this.releaseT = 0;
+        this.audio.modal(receiverModes(1.35), [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }], port, 0.6); // catch
+        this.audio.modal(receiverModes(1), [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }], port, 1.1, { delayMs: 25 }); // slams home
+        if (this.rounds > 0) { this.rounds--; this.chambered = true; }
+      }
+    } else if (cur.phase === 'charge') {
+      this.rackCycle(this.phaseT, prevPhase !== 'charge');
+    }
+    if (this.reloadT >= cur.end && cur === plan[plan.length - 1]) {
+      // safety net: whatever the choreography did, the weapon ends chambered with a full magazine behind it
+      if (!this.chambered && this.rounds > 0) { this.rounds--; this.chambered = true; }
+      this.anim.lockedOpen = false;
       this.reloadT = -1;
+      this.reloadPhase = null;
+      this.rackPull = -1;
     }
   }
 
