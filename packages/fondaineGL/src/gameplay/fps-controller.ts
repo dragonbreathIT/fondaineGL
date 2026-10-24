@@ -52,6 +52,8 @@ export class FPSController extends Behaviour {
   grounded = false;
   crouched = false;
   sprinting = false;
+  /** Smoothed 0..1 sprint state for anything that animates with it (head motion, weapon carry). */
+  sprintBlend = 0;
   aiming = false;
   moving = 0;               // 0..1 locomotion intensity
   lean = 0;                 // -1..1
@@ -133,6 +135,7 @@ export class FPSController extends Behaviour {
       else { this.character.setHeight(this.crouchHeight); this.crouched = true; }
     }
     this.sprinting = inp.action('sprint') && axis.y > 0.3 && !this.crouched && !this.aiming;
+    this.sprintBlend = damp(this.sprintBlend, this.sprinting ? 1 : 0, 0.09, dt);
     let speed = this.crouched ? this.crouchSpeed : this.sprinting ? this.sprintSpeed : this.walkSpeed;
     if (this.aiming) speed *= this.adsSpeedFactor;
     // wish direction in world space
@@ -171,7 +174,7 @@ export class FPSController extends Behaviour {
       const s = Math.sign(Math.sin(this.bobPhase));
       if (s !== this.lastStepSign) {
         this.lastStepSign = s;
-        const intensity = this.crouched ? 0.5 : this.sprinting ? 1.6 : 1;
+        const intensity = this.crouched ? 0.5 : 1 + 0.6 * this.sprintBlend;
         this.onFootstep?.(surfaceOf(this.groundMaterial).footstepSound, this.feet, intensity);
       }
     }
@@ -183,7 +186,7 @@ export class FPSController extends Behaviour {
     this.height = this.standHeight + (this.crouchHeight - this.standHeight) * this.crouchBlend;
     this.landT = damp(this.landT, 0, 0.12, dt);
     const ph = this.bobPhase;
-    const amp = this.moving * (this.sprinting ? 1.8 : 1) * (this.aiming ? 0.35 : 1);
+    const amp = this.moving * (1 + 0.8 * this.sprintBlend) * (this.aiming ? 0.35 : 1);
     const bobY = -Math.abs(Math.sin(ph)) * this.bobVertical * amp - this.landT * this.landingDip;
     const bobX = Math.cos(ph) * this.bobLateral * amp;
     const roll = Math.cos(ph) * this.bobRoll * DEG2RAD * amp - this.lean * this.leanAngle * DEG2RAD;

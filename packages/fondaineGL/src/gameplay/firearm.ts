@@ -207,6 +207,8 @@ export class Firearm extends Behaviour {
   private reloadNeedsCharge = false;
   private rackT = -1;          // seconds into a stand-alone rack (−1 = none)
   private rackSoundDone = 0;
+  /** 0..1 blend into the sprint carry (damped, so the hands never jump). */
+  private sprintBlend = 0;
   private equipT = 1e9;
   private droppedMags: DroppedMag[] = [];
   private magByBody = new Map<number, DroppedMag>();
@@ -406,6 +408,8 @@ export class Firearm extends Behaviour {
     // ---- ADS
     const wantAds = this.adsOverride !== null ? this.adsOverride > 0.5 : inp.action('aim') && !ctrl.sprinting;
     this.ads = damp(this.ads, wantAds ? 1 : 0, s.adsTime / 4, dt);
+    // sprint carry: gun drops and cants across the chest over ~0.3 s; coming back up is a touch faster
+    this.sprintBlend = damp(this.sprintBlend, ctrl.sprinting && this.reloadT < 0 && this.rackT < 0 ? 1 : 0, ctrl.sprinting ? 0.09 : 0.07, dt);
     ctrl.aiming = this.ads > 0.5;
     // the eye accommodates on the front sight while aiming (depth of field blurs the target realistically)
     const dof = this.renderer.settings.dof;
@@ -471,7 +475,7 @@ export class Firearm extends Behaviour {
       this.sway.vy += (-sk * this.sway.y - sc * this.sway.vy) * h; this.sway.y += this.sway.vy * h;
     }
     if (inp.action('holdBreath') && this.ads > 0.5) this.holdBreathT = Math.min(this.holdBreathT + dt, 6); else this.holdBreathT = Math.max(0, this.holdBreathT - dt * 0.5);
-    const breathAmt = (0.0016 + 0.004 * ctrl.moving + (ctrl.sprinting ? 0.01 : 0)) * (this.holdBreathT > 0 && this.holdBreathT < 4 ? 0.15 : 1) * (1 - 0.4 * this.ads);
+    const breathAmt = (0.0016 + 0.004 * ctrl.moving + 0.01 * this.sprintBlend) * (this.holdBreathT > 0 && this.holdBreathT < 4 ? 0.15 : 1) * (1 - 0.4 * this.ads);
     this.breathPhase += dt * (0.25 + 0.35 * ctrl.moving) * Math.PI * 2;
     const breathX = Math.sin(this.breathPhase) * breathAmt;
     const breathY = Math.sin(this.breathPhase * 0.5 + 1.3) * breathAmt * 0.6;
@@ -532,10 +536,11 @@ export class Firearm extends Behaviour {
     const eyeRot = ctrl.eyeRot, eye = ctrl.eyePos;
     const sw = Math.sin(Math.PI * this.switchT) * (1 - this.switchT * 0.3);
     const swayQ = quat.fromEuler(quat.create(), this.sway.x + breathX + this.rot.x + this.kick.rx - 0.02 * sw, this.sway.y + breathY + this.rot.y, this.sway.y * 0.6 + this.kick.rz + 0.12 * sw);
-    const sprintTilt = ctrl.sprinting ? quat.fromEuler(quat.create(), -0.35, 0.55, 0.25) : quat.create();
+    const sp = this.sprintBlend * this.sprintBlend * (3 - 2 * this.sprintBlend);
+    const sprintTilt = quat.fromEuler(quat.create(), -0.35, 0.55, 0.25);
     const reloadQ = this.reloadPose();
     const rotGun = quat.multiply(quat.create(), eyeRot, swayQ);
-    quat.multiply(rotGun, rotGun, quat.slerp(quat.create(), quat.create(), sprintTilt, ctrl.sprinting ? 1 : 0));
+    quat.multiply(rotGun, rotGun, quat.slerp(quat.create(), quat.create(), sprintTilt, sp));
     quat.multiply(rotGun, rotGun, reloadQ.q);
     const e = 1 - this.anim.equip;
     if (e > 0) quat.multiply(rotGun, rotGun, quat.fromEuler(quat.create(), -1.1 * e * e, 0.25 * e, 0.5 * e * e));
@@ -550,10 +555,11 @@ export class Firearm extends Behaviour {
     const a = this.ads * this.ads * (3 - 2 * this.ads);
     const pos = vec3.lerp(vec3.create(), hip, adsPos, a);
     // recoil push-back along the bore + reload lowering
-    const back = vec3.transformQuat(vec3.create(), [0, reloadQ.lift - this.equipDrop() - 0.01 * sw, this.back.z + this.kick.z + reloadQ.back], rotGun);
+    // sprint: the muzzle drops and the gun pulls in towards the chest (smoothly, via sprintBlend)
+    const back = vec3.transformQuat(vec3.create(), [-0.02 * sp, reloadQ.lift - this.equipDrop() - 0.01 * sw - 0.05 * sp, this.back.z + this.kick.z + reloadQ.back + 0.06 * sp], rotGun);
     vec3.add(pos, pos, back);
     // movement bob (weapon lags the head a little)
-    const bob = Math.sin(this.engine.time * 7) * 0.003 * ctrl.moving * (1 - a);
+    const bob = Math.sin(this.engine.time * 7) * 0.003 * ctrl.moving * (1 - a) * (1 + 1.5 * sp);
     pos[1] += bob;
     mat4.fromRotationTranslation(this.rootWorld, rotGun, pos);
     const A = this.anim, ax = this.model.magAxis;

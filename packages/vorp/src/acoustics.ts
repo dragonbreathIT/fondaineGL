@@ -116,3 +116,69 @@ export const sendFromCriticalDistance = (rc: number) => -20 * Math.log10(Math.ma
  * V in m³, RT60 in s.
  */
 export const criticalDistance = (volume: number, rt60: number) => 0.057 * Math.sqrt(volume / Math.max(rt60, 0.05));
+
+// ------------------------------------------------------------------------------------------ reflections
+
+export interface ReflectorMaterial {
+  /** Pressure reflection coefficient (0..1). Concrete ≈ 0.97, wood ≈ 0.85, packed dirt ≈ 0.7, grass ≈ 0.5. */
+  reflection: number;
+  /** Absorption lowpass of the surface (Hz). */
+  lowpassHz: number;
+}
+
+export interface ReflectionTap { path: number; gain: number; lowpassHz: number; dir: number[] }
+
+export interface ShoeboxSpec {
+  /** Axis-aligned bounds of the space (m). */
+  min: ArrayLike<number>;
+  max: ArrayLike<number>;
+  /** Materials per face; a missing face (e.g. the open front of a covered firing point) is `null`. */
+  faces: { floor: ReflectorMaterial | null; ceiling: ReflectorMaterial | null; left: ReflectorMaterial | null; right: ReflectorMaterial | null; back: ReflectorMaterial | null; front: ReflectorMaterial | null };
+  /** Source facing direction + front/rear directivity (dB) applied to the departing ray of each image. */
+  dir?: ArrayLike<number>;
+  directivityDb?: number;
+}
+
+/**
+ * First-order image sources of `src` in a shoebox around the listener (floor, ceiling, walls). Used by the lab
+ * and the offline reference renders for a covered firing point; the runtime computes the same from physics
+ * raycasts. Returns taps sorted loudest first (max 10), in the format `VoiceHandle.setTaps` expects.
+ */
+export function shoeboxTaps(src: ArrayLike<number>, listener: ArrayLike<number>, box: ShoeboxSpec): ReflectionTap[] {
+  const S = [src[0], src[1], src[2]], L = [listener[0], listener[1], listener[2]];
+  const dirN = box.dir ? norm3([box.dir[0], box.dir[1], box.dir[2]]) : null;
+  const ddb = box.directivityDb ?? 0;
+  const planes: { axis: number; value: number; mat: ReflectorMaterial | null }[] = [
+    { axis: 1, value: box.min[1], mat: box.faces.floor },
+    { axis: 1, value: box.max[1], mat: box.faces.ceiling },
+    { axis: 0, value: box.min[0], mat: box.faces.left },
+    { axis: 0, value: box.max[0], mat: box.faces.right },
+    { axis: 2, value: box.max[2], mat: box.faces.back },
+    { axis: 2, value: box.min[2], mat: box.faces.front },
+  ];
+  const taps: (ReflectionTap & { e: number })[] = [];
+  for (const p of planes) {
+    if (!p.mat) continue;
+    const img = S.slice();
+    img[p.axis] = 2 * p.value - S[p.axis];
+    const ray = [L[0] - img[0], L[1] - img[1], L[2] - img[2]];
+    const path = Math.hypot(ray[0], ray[1], ray[2]);
+    if (path < 0.2) continue;
+    // reflection point: where image→listener crosses the plane
+    const t = (p.value - img[p.axis]) / (ray[p.axis] || 1e-9);
+    if (t <= 0 || t >= 1) continue;
+    const R = [img[0] + ray[0] * t, img[1] + ray[1] * t, img[2] + ray[2] * t];
+    const depart = norm3([R[0] - S[0], R[1] - S[1], R[2] - S[2]]);
+    const arrive = norm3([R[0] - L[0], R[1] - L[1], R[2] - L[2]]);
+    let g = p.mat.reflection / path;
+    if (dirN && ddb > 0) g *= Math.pow(10, (-ddb * (1 - (dirN[0] * depart[0] + dirN[1] * depart[1] + dirN[2] * depart[2])) * 0.5) / 20);
+    taps.push({ path, gain: g, lowpassHz: p.mat.lowpassHz, dir: arrive, e: g * g });
+  }
+  taps.sort((a, b) => b.e - a.e);
+  return taps.slice(0, 10).map(({ path, gain, lowpassHz, dir }) => ({ path, gain, lowpassHz, dir }));
+}
+
+function norm3(v: number[]): number[] {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
