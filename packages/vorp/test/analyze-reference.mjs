@@ -56,12 +56,27 @@ function analyze(path, opts = {}) {
   const n = L.length;
   let peak = 0;
   for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]));
-  const thr = peak * Math.pow(10, -30 / 20);
+  const thr = peak * Math.pow(10, -12 / 20); // onset = first sample within 12 dB of the peak (skips the hammer fall)
   let onset = 0;
   while (onset < n && Math.abs(L[onset]) < thr && Math.abs(R[onset]) < thr) onset++;
   const ms = (x) => Math.round((x * sr) / 1000);
   const r50 = rms(L, R, onset, Math.min(n, onset + ms(50)));
+  const r300 = rms(L, R, onset, Math.min(n, onset + ms(300)));
   const r1s = rms(L, R, onset, Math.min(n, onset + sr));
+  // low band (< 150 Hz) RMS over 1 s from onset, via a 2nd-order Butterworth lowpass
+  let lfRms = 0;
+  {
+    const w0 = Math.tan((Math.PI * 150) / sr), k = w0 * w0, q = Math.SQRT2 * w0, a0 = 1 + q + k;
+    const b0 = k / a0, b1 = 2 * k / a0, b2 = b0, a1 = (2 * (k - 1)) / a0, a2 = (1 - q + k) / a0;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0, acc = 0;
+    const end = Math.min(n, onset + sr);
+    for (let i = onset; i < end; i++) {
+      const x = 0.5 * (L[i] + R[i]);
+      const y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+      x2 = x1; x1 = x; y2 = y1; y1 = y; acc += y * y;
+    }
+    lfRms = Math.sqrt(acc / Math.max(1, end - onset));
+  }
   // spectrum over 0.5 s from onset
   const N = 32768;
   const re = new Float64Array(N), im = new Float64Array(N);
@@ -87,7 +102,7 @@ function analyze(path, opts = {}) {
   for (let i = pi; i < limit; i++) if (env[i] > target) last = i;
   const t20 = ((last - pi) * hop) / sr;
   const floor = db(rms(L, R, Math.max(0, n - ms(200)), n));
-  const out = { file: basename(path), peak: db(peak), r50: db(r50), r1s: db(r1s), crest: db(peak) - db(r1s), centroid, lfRatio, t20, floor };
+  const out = { file: basename(path), peak: db(peak), r50: db(r50), r300: db(r300), r1s: db(r1s), crest: db(peak) - db(r1s), centroid, lfRatio, lfRms: db(lfRms), t20, floor };
   if (opts.burst) {
     const { count, intervalMs } = opts.burst;
     const peaks = [];
@@ -101,8 +116,8 @@ function analyze(path, opts = {}) {
   return out;
 }
 
-const fmt = (r) => [r.peak.toFixed(1), r.r50.toFixed(1), r.r1s.toFixed(1), r.crest.toFixed(1), Math.round(r.centroid), (100 * r.lfRatio).toFixed(0) + '%', r.t20.toFixed(2), r.floor.toFixed(1)];
-const HEAD = ['peak dBFS', 'RMS 50 ms', 'RMS 1 s', 'crest dB', 'centroid Hz', 'LF<150 Hz', 't −20 dB s', 'floor dBFS'];
+const fmt = (r) => [r.peak.toFixed(1), r.r50.toFixed(1), r.r300.toFixed(1), r.r1s.toFixed(1), r.crest.toFixed(1), Math.round(r.centroid), (100 * r.lfRatio).toFixed(0) + '%', r.lfRms.toFixed(1), r.t20.toFixed(2), r.floor.toFixed(1)];
+const HEAD = ['peak dBFS', 'RMS 50 ms', 'RMS 300 ms', 'RMS 1 s', 'crest dB', 'centroid Hz', 'LF share', 'LF RMS 1 s', 't −20 dB s', 'floor dBFS'];
 const dirs = process.argv.slice(2);
 if (!dirs.length) { console.error('usage: analyze-reference.mjs <dir> [after_dir]'); process.exit(2); }
 const files = readdirSync(dirs[dirs.length - 1]).filter((f) => f.endsWith('.wav')).sort();

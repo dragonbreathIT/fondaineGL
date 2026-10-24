@@ -1,5 +1,7 @@
-//! Offline renders of reference scenarios to 16-bit WAV for listening / analysis:
+//! Offline renders of reference scenarios to 16-bit WAV for listening / analysis (engine defaults only):
 //!   cargo run --release -p vorp-dsp --example render_wav -- <out_dir>
+//! The canonical reference set in docs/vorp-reference/ is rendered with the real TypeScript presets by
+//!   node tools/run-ts.mjs packages/vorp/test/render-reference.ts   (see docs/vorp-reference/README.md).
 //! Scenarios: shooter's ears (unprotected, passive muffs, electronic muffs), bystander 25 m, 300 m downrange
 //! (crack + delayed boom), suppressed, steel-plate hit at 100 m.
 

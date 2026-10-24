@@ -69,7 +69,7 @@ function seeded(seed: number) {
 }
 
 function shooter(off: VorpOffline, preset: GunshotPreset, times: number[], extra: Record<string, number> = {}, box = FIRING_POINT) {
-  const zone = ZONES.outdoorRange;
+  const zone = off.zone ?? ZONES.coveredRange;
   for (const t of times) {
     const r = off.gunshot(preset, MUZZLE, FWD, PORT, extra, { delayMs: t });
     r.blast.setTaps(tapsFor(zone, box, MUZZLE, EYES, FWD, preset.params.directivityDb ?? 9));
@@ -79,13 +79,13 @@ function shooter(off: VorpOffline, preset: GunshotPreset, times: number[], extra
 
 function mech(off: VorpOffline, name: MechName, pos: number[], t: number) {
   const r = off.mech(name, pos, { delayMs: t });
-  const taps = tapsFor(ZONES.outdoorRange, FIRING_POINT, pos, EYES, null, 0).slice(0, 6);
+  const taps = tapsFor(off.zone ?? ZONES.coveredRange, FIRING_POINT, pos, EYES, null, 0).slice(0, 6);
   r.noise.setTaps(taps);
   r.ring?.setTaps(taps);
 }
 
-const base = (off: VorpOffline, protection = 0) => {
-  off.setZone(ZONES.outdoorRange);
+const base = (off: VorpOffline, protection = 0, zone = ZONES.coveredRange) => {
+  off.setZone(zone);
   off.setListener(EYES, FWD, [0, 1, 0]);
   off.setAtmosphere(18, 0.55);
   off.setHearing({ protection });
@@ -98,7 +98,7 @@ const SCENES: Scene[] = [
   { name: '04_shooter_suppressed', seconds: 3.0, build: (o) => { base(o); shooter(o, GUNSHOTS.rifle556_16in, [50], { suppress: 1 }); } },
   {
     name: '05_bystander_25m', seconds: 3.0, build: (o) => {
-      base(o);
+      base(o, 0, ZONES.outdoorRange);
       const p = GUNSHOTS.rifle556_16in;
       const muzzle = [25.05, 1.57, -0.75];
       const r = o.gunshot(p, muzzle, FWD, null, {}, { delayMs: 50 });
@@ -107,7 +107,7 @@ const SCENES: Scene[] = [
   },
   {
     name: '06_downrange_300m_crack_then_boom', seconds: 3.0, build: (o) => {
-      base(o);
+      base(o, 0, ZONES.outdoorRange);
       const c = speedOfSound(18);
       // 5.56 at ~M2.0 passing 3 m to the right at 300 m; the muzzle report arrives ~0.9 s later
       const nw = whithamNWave({ mach: 2.0, diameter: 0.0057, length: 0.023, missDistance: 3, c });
@@ -120,7 +120,7 @@ const SCENES: Scene[] = [
   },
   {
     name: '07_steel_plate_100m', seconds: 3.5, build: (o) => {
-      base(o);
+      base(o, 0, ZONES.outdoorRange);
       const modes = plateModes({ width: 0.3, height: 0.45, thickness: 0.0095, level: 30 });
       const h = o.modal(modes, [{ timeMs: 0, amp: 1.2, contactMs: 0.02, noiseDb: -14 }], [0, 1.4, -100], 1, { delayMs: 100 });
       h.setTaps(tapsFor(ZONES.outdoorRange, OPEN_GROUND, [0, 1.4, -100], EYES, null, 0));

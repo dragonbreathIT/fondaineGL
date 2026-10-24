@@ -67,7 +67,7 @@ await setStatus('Loading physics and audio cores');
 registerSurfaces(engine.physics, engine.audio);
 await setStatus('Setting the weather: 18 °C, 1013 hPa, light wind');
 engine.physics.setAtmosphere(18, 1013.25, 0.55, [1.6, 0, 0.6]);
-engine.renderer.particles.wind.set([1.6, 0, 0.6]);
+engine.wind.set({ speed: 1.7, direction: [1.6, 0, 0.6], gustiness: 0.35 });
 await setStatus('Reading the asset manifest');
 const assets = params.get('scanned') === '0' ? undefined : await AssetLibrary.load(engine.renderer, '../../assets/');
 const range = await buildRange(engine, {
@@ -267,7 +267,7 @@ function applyRig(rig: CameraRig) {
     Object.assign(R.grade, { tonemapper: 'aces', contrast: 1.12, saturation: 0.86, temperature: 0.06, tint: -0.03 });
   } else {
     cam.fovY = 68 * DEG2RAD;
-    cam.viewmodelFovY = 55 * DEG2RAD;
+    cam.viewmodelFovY = 62 * DEG2RAD;  // wide enough to keep the grip, magwell and support hand in frame
     cam.iso = 100;
     Object.assign(R.lens, { distortion: 0, distortion2: 0, fillZoom: 1, chromaticAberration: 0.12, naturalVignette: 0.45, vignette: 0.08, vignetteRoundness: 0.6, sharpen: 0.25 });
     Object.assign(R.sensor, { enabled: true, readNoise: 0.0015, shotNoise: 0.0012, gain: 1 });

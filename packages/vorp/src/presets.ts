@@ -13,32 +13,37 @@ export interface GunshotPreset {
 
 export const GUNSHOTS: Record<string, GunshotPreset> = {
   // Each gun has its own signature: report pitch/decay (snap vs crack vs boom), gas roar, body and sub
-  // thump, plus a mechanical action pattern. Levels are tuned with `cargo run --example loudness`.
+  // punch, plus a mechanical action pattern. Body/sub/crack/roar are relative to the *uncompacted* blast peak;
+  // the spike itself is compacted by `driveDb`, so a body at −9 dB sits ~3 dB above the compacted spike.
+  // Levels are checked with `node tools/run-ts.mjs packages/vorp/test/render-reference.ts` + analyze-reference.mjs.
   rifle556_16in: {
     name: '5.56×45 — 16" carbine',
-    params: { peakSpl: 160, positiveMs: 0.9, decayB: 1.6, crackDb: -3, crackHz: 3300, crackMs: 14, turbDb: -5, turbMs: 120, turbLp: 6000, bodyDb: -7, bodyHz: 72, bodyMs: 150, subDb: -10, subHz: 46, subMs: 140, driveDb: 12, directivityDb: 9, rearLpHz: 4500, tailSendDb: 4 },
+    // violent bright crack + big chest punch, long roar
+    params: { peakSpl: 160, positiveMs: 0.9, decayB: 1.6, crackDb: -2, crackHz: 4200, crackMs: 8, turbDb: -5, turbMs: 360, turbHp: 150, turbLp: 6500, bodyDb: -9, bodyHz: 70, bodyMs: 320, bodyDrop: 0.4, subDb: -12, subHz: 44, subMs: 420, driveDb: 12, directivityDb: 9, rearLpHz: 5000, tailSendDb: 4 },
     // hammer, bolt unlock + buffer spring 'sproing', bolt slams home
-    action: { brightness: 1.35, level: 1.4, hits: [{ timeMs: -3, amp: 0.3, contactMs: 0.05, noiseDb: -12 }, { timeMs: 3, amp: 1.1, contactMs: 0.12, noiseDb: -6 }, { timeMs: 40, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 72, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
+    action: { brightness: 1.35, level: 1.4, hits: [{ timeMs: -3, amp: 0.15, contactMs: 0.05, noiseDb: -14 }, { timeMs: 3, amp: 1.1, contactMs: 0.12, noiseDb: -6 }, { timeMs: 40, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 72, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
   },
   rifle556_10in: {
     name: '5.56×45 — 10.3" SBR',
-    params: { peakSpl: 163, positiveMs: 1.1, decayB: 1.5, crackDb: -2, crackHz: 2900, crackMs: 20, turbDb: -3, turbMs: 190, turbLp: 5000, bodyDb: -5, bodyHz: 60, bodyMs: 200, subDb: -7, subHz: 42, subMs: 170, driveDb: 14, directivityDb: 7, rearLpHz: 6000, tailSendDb: 5 },
-    action: { brightness: 1.3, level: 1.4, hits: [{ timeMs: -3, amp: 0.3, contactMs: 0.05, noiseDb: -12 }, { timeMs: 2.5, amp: 1.2, contactMs: 0.12, noiseDb: -6 }, { timeMs: 36, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 64, amp: 1.6, contactMs: 0.09, noiseDb: -3 }] },
+    // more unburnt powder: louder, more roar and body, slightly lower crack
+    params: { peakSpl: 163, positiveMs: 1.1, decayB: 1.5, crackDb: -1, crackHz: 3800, crackMs: 10, turbDb: -3, turbMs: 380, turbHp: 140, turbLp: 5500, bodyDb: -7, bodyHz: 60, bodyMs: 380, bodyDrop: 0.4, subDb: -9, subHz: 42, subMs: 480, driveDb: 14, directivityDb: 7, rearLpHz: 6500, tailSendDb: 5 },
+    action: { brightness: 1.3, level: 1.4, hits: [{ timeMs: -3, amp: 0.15, contactMs: 0.05, noiseDb: -14 }, { timeMs: 2.5, amp: 1.2, contactMs: 0.12, noiseDb: -6 }, { timeMs: 36, amp: 0.5, contactMs: 0.3, noiseDb: -14 }, { timeMs: 64, amp: 1.6, contactMs: 0.09, noiseDb: -3 }] },
   },
   rifle308_bolt: {
     name: '.308 Win — 20" bolt action',
-    params: { peakSpl: 163, positiveMs: 1.4, decayB: 1.3, crackDb: -6, crackHz: 2200, crackMs: 22, turbDb: -6, turbMs: 160, turbLp: 4200, bodyDb: -4, bodyHz: 50, bodyMs: 260, subDb: -5, subHz: 35, subMs: 220, driveDb: 13, directivityDb: 10, rearLpHz: 4000, tailSendDb: 6 },
+    // deep boom: lower crack, the biggest body and sub, long roar
+    params: { peakSpl: 163, positiveMs: 1.4, decayB: 1.3, crackDb: -4, crackHz: 2600, crackMs: 12, turbDb: -5, turbMs: 360, turbHp: 110, turbLp: 4800, bodyDb: -6, bodyHz: 50, bodyMs: 450, bodyDrop: 0.35, subDb: -7, subHz: 34, subMs: 560, driveDb: 13, directivityDb: 10, rearLpHz: 4500, tailSendDb: 6 },
     action: { brightness: 0.85, level: 0.6, hits: [{ timeMs: -4, amp: 0.45, contactMs: 0.06, noiseDb: -10 }] },
   },
   pistol9mm: {
     name: '9×19 — 4" pistol',
-    // mid-heavy 'pop/snap' with a short body; slide clack carries a lot of the character
-    params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.6, crackDb: -2, crackHz: 1800, crackMs: 26, turbDb: -7, turbMs: 90, turbLp: 4500, bodyDb: -6, bodyHz: 95, bodyMs: 110, subDb: -14, subHz: 55, subMs: 90, driveDb: 11, directivityDb: 6, rearLpHz: 6500, precursorDb: -20, tailSendDb: 3 },
+    // sharp hard BANG: strong short snap, little body, almost no sub; slide clack carries a lot of the character
+    params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.7, crackDb: -1, crackHz: 2300, crackMs: 7, turbDb: -6, turbMs: 200, turbHp: 200, turbLp: 6000, bodyDb: -12, bodyHz: 100, bodyMs: 170, bodyDrop: 0.5, subDb: -20, subHz: 55, subMs: 160, driveDb: 11, directivityDb: 6, rearLpHz: 7000, precursorDb: -20, tailSendDb: 4 },
     action: { brightness: 0.95, level: 1.3, hits: [{ timeMs: -2, amp: 0.25, contactMs: 0.05, noiseDb: -12 }, { timeMs: 4, amp: 0.9, contactMs: 0.1, noiseDb: -6 }, { timeMs: 14, amp: 1.1, contactMs: 0.09, noiseDb: -4 }] },
   },
   pistol9mm_auto: {
     name: '9×19 — 4" select-fire pistol',
-    params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.6, crackDb: -2, crackHz: 1900, crackMs: 22, turbDb: -6, turbMs: 80, turbLp: 4800, bodyDb: -6, bodyHz: 100, bodyMs: 90, subDb: -13, subHz: 58, subMs: 80, driveDb: 11, directivityDb: 6, rearLpHz: 6500, precursorDb: -20, tailSendDb: 3 },
+    params: { peakSpl: 157, positiveMs: 0.6, decayB: 1.7, crackDb: -1, crackHz: 2400, crackMs: 6, turbDb: -5, turbMs: 140, turbHp: 200, turbLp: 6500, bodyDb: -12, bodyHz: 105, bodyMs: 150, bodyDrop: 0.5, subDb: -19, subHz: 58, subMs: 140, driveDb: 11, directivityDb: 6, rearLpHz: 7000, precursorDb: -20, tailSendDb: 3 },
     action: { brightness: 1.0, level: 1.3, hits: [{ timeMs: -2, amp: 0.25, contactMs: 0.05, noiseDb: -12 }, { timeMs: 4, amp: 0.9, contactMs: 0.1, noiseDb: -6 }, { timeMs: 12, amp: 1.0, contactMs: 0.09, noiseDb: -4 }] },
   },
 };
@@ -64,6 +69,19 @@ export const ZONES: Record<string, ZonePreset> = {
       { azimuth: 75, distance: 230, reflectivity: 0.25, lowpassHz: 1800 },
       { azimuth: -80, distance: 190, reflectivity: 0.28, lowpassHz: 1800 },
       { azimuth: 180, distance: 300, reflectivity: 0.2, lowpassHz: 1500 },
+    ],
+  },
+  coveredRange: {
+    name: 'Covered firing point (roof, baffles, open field beyond)',
+    // dense short slap field under the roof + the open-range tail; the critical distance under the roof is small,
+    // so the late field is much stronger than in the open (this is what makes a shot under a roof hurt)
+    reverb: { rt60Low: 1.8, rt60Mid: 1.2, rt60High: 0.45, xoverLow: 300, xoverHigh: 3000, size: 1.6, diffusion: 0.85, predelayMs: 10, modDepthMs: 0.35, modRateHz: 0.5, levelDb: 0, toneHz: 6000 },
+    criticalDistance: 8,
+    ambience: { windSpl: 44, windGust: 0.5, windGustRate: 0.12, windToneHz: 480, rumbleSpl: 36, enable: 1 },
+    farReflectors: [
+      { azimuth: 0, distance: 140, reflectivity: 0.35, lowpassHz: 2200 },
+      { azimuth: 75, distance: 230, reflectivity: 0.25, lowpassHz: 1800 },
+      { azimuth: -80, distance: 190, reflectivity: 0.28, lowpassHz: 1800 },
     ],
   },
   indoorRange: {
@@ -113,67 +131,68 @@ export interface MechPreset {
 
 /**
  * Weapon-handling sounds, at 1 m (the action sits ≈ 0.25–0.4 m from the shooter's ears, so they land
- * 8–12 dB louder than listed). Use `vorp.mech('magRelease', pos)` for noise + ring, or
- * `vorp.noise(MECH.magRelease.noise, pos)` for the texture alone. Levels put them 30–45 dB under a shot.
+ * 8–12 dB louder than listed; `levelSpl` is the noise RMS, peaks sit ~10 dB above it). Use
+ * `vorp.mech('magRelease', pos)` for noise + ring, or `vorp.noise(MECH.magRelease.noise, pos)` for the
+ * texture alone. Levels put them 30–45 dB under a shot.
  */
 export const MECH = {
   /** Magazine release button: a short, bright latch click. */
   magRelease: {
-    noise: { levelSpl: 72, attackMs: 0.15, decayMs: 22, hpHz: 1800, lpHz: 9500, thumpHz: 420, thumpDb: -10, thumpMs: 7, resonance: 1.3 },
-    ring: { brightness: 1.4, level: 0.7, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
+    noise: { levelSpl: 62, attackMs: 0.15, decayMs: 22, hpHz: 1800, lpHz: 9500, thumpHz: 420, thumpDb: -10, thumpMs: 7, resonance: 1.3 },
+    ring: { brightness: 1.4, level: 0.2, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Empty magazine slides out of the well (polymer on aluminium). */
   magOut: {
-    noise: { levelSpl: 68, attackMs: 8, decayMs: 140, hpHz: 500, lpHz: 6000, thumpDb: -40, grainsPerS: 350, grainDb: -14, resonance: 0.8 },
+    noise: { levelSpl: 58, attackMs: 8, decayMs: 140, hpHz: 500, lpHz: 6000, thumpDb: -40, grainsPerS: 350, grainDb: -14, resonance: 0.8 },
   },
   /** Magazine landing on concrete: hard slap + bounce. */
   magDropConcrete: {
-    noise: { levelSpl: 94, attackMs: 0.08, decayMs: 60, hpHz: 220, lpHz: 7500, thumpHz: 150, thumpDb: 3, thumpMs: 38, grainsPerS: 500, grainDb: -10, resonance: 1.1, hit2Ms: 48, hit2Db: -9 },
-    ring: { brightness: 0.55, level: 0.35, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
+    noise: { levelSpl: 86, attackMs: 0.08, decayMs: 60, hpHz: 220, lpHz: 7500, thumpHz: 150, thumpDb: 3, thumpMs: 38, grainsPerS: 500, grainDb: -10, resonance: 1.1, hit2Ms: 48, hit2Db: -9 },
+    ring: { brightness: 0.55, level: 0.3, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
   },
   /** Magazine landing on dirt / grass: dull thud, no bounce. */
   magDropDirt: {
-    noise: { levelSpl: 86, attackMs: 0.6, decayMs: 85, hpHz: 70, lpHz: 2400, thumpHz: 72, thumpDb: 5, thumpMs: 65, grainsPerS: 700, grainDb: -16, resonance: 0.75 },
+    noise: { levelSpl: 76, attackMs: 0.6, decayMs: 85, hpHz: 70, lpHz: 2400, thumpHz: 72, thumpDb: 5, thumpMs: 65, grainsPerS: 700, grainDb: -16, resonance: 0.75 },
   },
   /** Magazine seating: two-stage click (catch engages, then the mag seats fully ~35 ms later). */
   magSeat: {
-    noise: { levelSpl: 84, attackMs: 0.1, decayMs: 34, hpHz: 650, lpHz: 8500, thumpHz: 230, thumpDb: -3, thumpMs: 22, resonance: 1.0, hit2Ms: 35, hit2Db: -2 },
-    ring: { brightness: 1.15, level: 0.9, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
+    noise: { levelSpl: 68, attackMs: 0.1, decayMs: 34, hpHz: 650, lpHz: 8500, thumpHz: 230, thumpDb: -3, thumpMs: 22, resonance: 1.0, hit2Ms: 35, hit2Db: -2 },
+    ring: { brightness: 1.15, level: 0.22, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Slide / carrier dragged back along the rails: a rasp with a spring hiss. */
   slideRack: {
-    noise: { levelSpl: 74, attackMs: 5, decayMs: 125, hpHz: 750, lpHz: 7800, thumpDb: -40, grainsPerS: 1100, grainDb: -7, resonance: 0.9 },
-    ring: { brightness: 1.25, level: 0.6, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
+    noise: { levelSpl: 62, attackMs: 5, decayMs: 125, hpHz: 750, lpHz: 7800, thumpDb: -40, grainsPerS: 1100, grainDb: -7, resonance: 0.9 },
+    ring: { brightness: 1.25, level: 0.15, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
   },
   /** Slide / carrier hits its rear stop. */
   slideStop: {
-    noise: { levelSpl: 82, attackMs: 0.08, decayMs: 40, hpHz: 480, lpHz: 9500, thumpHz: 270, thumpDb: -2, thumpMs: 18, resonance: 1.0 },
-    ring: { brightness: 1.1, level: 0.9, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
+    noise: { levelSpl: 66, attackMs: 0.08, decayMs: 40, hpHz: 480, lpHz: 9500, thumpHz: 270, thumpDb: -2, thumpMs: 18, resonance: 1.0 },
+    ring: { brightness: 1.1, level: 0.19, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Spring slams the slide / carrier home and chambers a round. */
   slideHome: {
-    noise: { levelSpl: 90, attackMs: 0.05, decayMs: 58, hpHz: 280, lpHz: 10500, thumpHz: 175, thumpDb: 2, thumpMs: 30, resonance: 1.0, hit2Ms: 7, hit2Db: -9 },
-    ring: { brightness: 1.0, level: 1.1, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
+    noise: { levelSpl: 72, attackMs: 0.05, decayMs: 58, hpHz: 280, lpHz: 10500, thumpHz: 175, thumpDb: 2, thumpMs: 30, resonance: 1.0, hit2Ms: 7, hit2Db: -9 },
+    ring: { brightness: 1.0, level: 0.17, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
   },
   /** AR charging handle: latch click, pull rasp, carrier reaches the rear. */
   chargingHandle: {
-    noise: { levelSpl: 76, attackMs: 1.5, decayMs: 95, hpHz: 600, lpHz: 7200, thumpDb: -40, grainsPerS: 600, grainDb: -10, resonance: 0.9, hit2Ms: 65, hit2Db: -3 },
-    ring: { brightness: 1.3, level: 0.6, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
+    noise: { levelSpl: 64, attackMs: 1.5, decayMs: 95, hpHz: 600, lpHz: 7200, thumpDb: -40, grainsPerS: 600, grainDb: -10, resonance: 0.9, hit2Ms: 65, hit2Db: -3 },
+    ring: { brightness: 1.3, level: 0.14, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Bolt catch / slide stop slapped: a small, hard, bright click. */
   boltCatch: {
-    noise: { levelSpl: 78, attackMs: 0.08, decayMs: 28, hpHz: 950, lpHz: 9500, thumpHz: 320, thumpDb: -8, thumpMs: 12, resonance: 1.2 },
-    ring: { brightness: 1.35, level: 0.6, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
+    noise: { levelSpl: 66, attackMs: 0.08, decayMs: 28, hpHz: 950, lpHz: 9500, thumpHz: 320, thumpDb: -8, thumpMs: 12, resonance: 1.2 },
+    ring: { brightness: 1.35, level: 0.15, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
   },
   /** Fire-selector detent. */
   selector: {
-    noise: { levelSpl: 70, attackMs: 0.1, decayMs: 20, hpHz: 1500, lpHz: 9000, thumpDb: -40, resonance: 1.2, hit2Ms: 16, hit2Db: 2 },
-    ring: { brightness: 1.75, level: 0.9, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
+    noise: { levelSpl: 60, attackMs: 0.1, decayMs: 20, hpHz: 1500, lpHz: 9000, thumpDb: -40, resonance: 1.2, hit2Ms: 16, hit2Db: 2 },
+    ring: { brightness: 1.75, level: 0.05, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
   },
   /** Hammer falls on an empty chamber. */
   dryFire: {
-    noise: { levelSpl: 74, attackMs: 0.05, decayMs: 18, hpHz: 1200, lpHz: 9000, thumpHz: 350, thumpDb: -12, thumpMs: 8, resonance: 1.1 },
-    ring: { brightness: 1.5, level: 0.5, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
+    noise: { levelSpl: 62, attackMs: 0.05, decayMs: 18, hpHz: 1200, lpHz: 9000, thumpHz: 350, thumpDb: -12, thumpMs: 8, resonance: 1.1 },
+    ring: { brightness: 1.5, level: 0.15, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
   },
 } satisfies Record<string, MechPreset>;
 

@@ -82,6 +82,7 @@ export class FirstPersonArms {
   readonly meshStats: ReturnType<typeof buildHandMesh>['stats'];
   private sides: Side[] = [];
   private sleeveLength: number;
+  private upperLength = 1;
   private tmp = mat4.create();
   private tmp2 = mat4.create();
 
@@ -122,7 +123,10 @@ export class FirstPersonArms {
     // sleeve: pushed-up combat-shirt sleeve from the lower forearm to just past the elbow, real length
     this.sleeveLength = Lf - SLEEVE_START + 0.03;
     const sleeveGeo = sleeveTube(this.sleeveLength);
-    const upperGeo = cylinder(0.046, 0.054, 1, seg(20)).rotateX(Math.PI / 2).translate(0, 0, -0.5).scale(1, 0.88, 1);
+    // upper arm sleeve built at its real length (elbow → shoulder + 0.4 m into the torso) so the fabric isn't smeared
+    const Lu = this.options.upperArmLength + 0.42;
+    const upperGeo = cylinder(0.040, 0.050, Lu, seg(20)).rotateX(Math.PI / 2).translate(0, 0, -Lu / 2).scale(1, 0.86, 1);
+    this.upperLength = Lu;
     // glove trim: a leather wrist cuff with a hook-and-loop closure strap + pull tab, and a padded knuckle panel.
     // Both are rigid to the hand root (the cuff sits on the wrist, the panel on the metacarpals).
     const cuffGeo = gloveCuff();
@@ -250,7 +254,7 @@ export class FirstPersonArms {
     segTo(S.sleeve, vec3.scaleAndAdd(vec3.create(), wrist, axis, SLEEVE_START * (foreLen / Lf)), vec3.scaleAndAdd(vec3.create(), elbow, axis, 0.03), sleeveUp, this.sleeveLength);
     const ued = vec3.normalize(vec3.create(), ue);
     // the upper arm continues past the shoulder joint into the torso (its end is never visible)
-    segTo(S.upper, vec3.scaleAndAdd(vec3.create(), elbow, ued, -0.02), vec3.scaleAndAdd(vec3.create(), shoulder, ued, 0.4), upB, 1);
+    segTo(S.upper, vec3.scaleAndAdd(vec3.create(), elbow, ued, -0.02), vec3.scaleAndAdd(vec3.create(), shoulder, ued, 0.4), upB, this.upperLength);
   }
 }
 
@@ -275,10 +279,10 @@ function knucklePanel(): Geometry {
 function sleeveTube(len: number): Geometry {
   // [radius, distance from the cuff]; the forearm skin under the cuff is ≈ 38 × 33 mm, the lip rolls inwards
   const prof: [number, number][] = [
-    [0.039, 0.007], [0.041, 0], [0.0445, 0.003], [0.047, 0.009], [0.0475, 0.017], [0.046, 0.026], [0.044, 0.034],
-    [0.044, len * 0.45], [0.0465, len * 0.8], [0.048, len], [0.040, len + 0.004], [0.0, len + 0.004],
+    [0.034, 0.006], [0.036, 0], [0.0395, 0.003], [0.0415, 0.009], [0.042, 0.016], [0.0405, 0.024], [0.0385, 0.032],
+    [0.0385, len * 0.4], [0.0405, len * 0.7], [0.0435, len * 0.9], [0.0445, len], [0.037, len + 0.004], [0.0, len + 0.004],
   ];
-  return lathe(prof, seg(22)).rotateX(-Math.PI / 2).scale(1, 0.88, 1);
+  return lathe(prof, seg(22)).rotateX(-Math.PI / 2).scale(1, 0.84, 1);
 }
 
 /** Two-bone IK: elbow position for upper arm `a` (shoulder→elbow) and forearm `b` (elbow→wrist). */
