@@ -1,10 +1,11 @@
 //! vorp engine: voices → (dry binaural + early reflections + late reverb) → ambience → hearing model
-//! → perceptual mapping (Pa → digital via calibration + compressor) → limiter → tinnitus → output.
+//! → perceptual mapping (Pa → digital via calibration + fast compressor) → overload saturator → limiter
+//! → tinnitus → output.
 
 use crate::air::Atmosphere;
 use crate::ambience::Ambience;
 use crate::convolver::Convolver;
-use crate::dynamics::{Compressor, CompressorParams, Limiter};
+use crate::dynamics::{Compressor, CompressorParams, Limiter, Overload};
 use crate::fdn::{Fdn, ReverbParams};
 use crate::hearing::Hearing;
 use crate::params::{master as M, op, reverb as R, spawn as S};
@@ -26,6 +27,7 @@ pub struct Engine {
     pub hearing: Hearing,
     pub ambience: Ambience,
     pub comp: Compressor,
+    pub overload: Overload,
     pub limiter: Limiter,
     pub master: [f32; M::COUNT],
     bus_gain: [f32; 4],
@@ -59,8 +61,9 @@ impl Engine {
             conv: Convolver::empty(),
             hearing: Hearing::new(sr),
             ambience: Ambience::new(sr),
-            comp: Compressor::new(sr, CompressorParams { threshold_db: -14.0, ratio: 4.0, knee_db: 8.0, attack_ms: 6.0, release_ms: 250.0, makeup_db: 0.0, detector_ms: 8.0 }),
-            limiter: Limiter::new(sr, 1.5, -1.0, 10.0),
+            comp: Compressor::new(sr, CompressorParams { threshold_db: -6.0, ratio: 2.6, knee_db: 6.0, attack_ms: 0.3, release_ms: 90.0, makeup_db: 0.0, detector_ms: 2.0 }),
+            overload: Overload::new(sr, -4.0, 0.5, 4500.0, 45.0),
+            limiter: Limiter::new(sr, 1.5, -0.3, 12.0),
             master: M::DEFAULTS,
             bus_gain: [1.0; 4],
             scene_l: [0.0; BLOCK],
@@ -93,6 +96,7 @@ impl Engine {
             makeup_db: m[M::MAKEUP_DB],
             detector_ms: m[M::COMP_DETECTOR_MS],
         });
+        self.overload.set(m[M::CLIP_KNEE_DB], m[M::SAT_ASYM], m[M::SAT_DULL_HZ], m[M::SAT_DULL_MS]);
         self.limiter.set(m[M::LIMIT_CEILING_DB], m[M::LIMIT_RELEASE_MS]);
         self.bus_gain = [
             db_to_lin(m[M::BUS_WEAPONS_DB]),
@@ -285,21 +289,22 @@ impl Engine {
         // hearing (protection, reflex, TTS)
         self.hearing.process(&mut self.scene_l, &mut self.scene_r);
 
-        // perceptual mapping: Pa -> digital
+        // perceptual mapping: Pa -> digital. The compressor attacks in a fraction of a millisecond so each
+        // onset is measured on its own level; what is still above full scale becomes density in the overload
+        // saturator (how a gunshot fills the speakers instead of being a 1 ms tick under a limiter).
         let cal = 1.0 / (P_REF * db_to_lin(self.master[M::CALIBRATION_SPL]));
         let master = db_to_lin(self.master[M::MASTER_DB]);
-        let knee = db_to_lin(self.master[M::CLIP_KNEE_DB].min(-0.1));
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..BLOCK {
-            let mut l = self.scene_l[i] * cal;
-            let mut r = self.scene_r[i] * cal;
-            let g = self.comp.gain(l.abs().max(r.abs()));
-            l *= g * master;
-            r *= g * master;
-            // loudness saturation: transparent below the knee, smoothly saturating towards full scale above
-            // (how a gunshot fills the speakers instead of being a 1 ms tick under a limiter)
-            l = soft_clip(l, knee);
-            r = soft_clip(r, knee);
+            let l = self.scene_l[i] * cal;
+            let r = self.scene_r[i] * cal;
+            let g = self.comp.gain(l.abs().max(r.abs())) * master;
+            self.scene_l[i] = l * g;
+            self.scene_r[i] = r * g;
+        }
+        self.overload.process(&mut self.scene_l, &mut self.scene_r);
+        for i in 0..BLOCK {
+            let (mut l, mut r) = (self.scene_l[i], self.scene_r[i]);
             self.limiter.process(&mut l, &mut r);
             self.out[i] = l;
             self.out[BLOCK + i] = r;
@@ -330,19 +335,10 @@ impl Engine {
         m[9] = self.hearing.last_peak_spl;
         m[12] = m[12].max(self.hearing.last_peak_spl); // max eardrum SPL since start
         m[10] = self.atm.c;
+        m[13] = self.overload.cutoff_hz;
         self.frames += BLOCK as u64;
         m[11] = self.frames as f32 / self.sr;
     }
-}
-
-/// Soft clipper: identity below `knee`, tanh-shaped saturation from `knee` up to 1.0 (never exceeds 1).
-#[inline]
-fn soft_clip(x: f32, knee: f32) -> f32 {
-    let a = x.abs();
-    if a <= knee { return x; }
-    let room = 1.0 - knee;
-    let y = knee + room * ((a - knee) / room).tanh();
-    y.copysign(x)
 }
 
 #[cfg(test)]

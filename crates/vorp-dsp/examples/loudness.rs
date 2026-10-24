@@ -14,12 +14,14 @@ fn cmd(e: &mut Engine, opcode: u32, args: &[f32]) {
     e.exec(v.len());
 }
 
+/// Mirrors `GUNSHOTS` in packages/vorp/src/presets.ts (the TypeScript side is the source of truth; the TS
+/// reference renderer `packages/vorp/test/render-reference.ts` + `analyze-reference.mjs` is the full check).
 pub fn presets() -> Vec<(&'static str, Vec<(usize, f32)>)> {
     vec![
-        ("rifle556_16in", vec![(G::PEAK_SPL, 160.0), (G::POS_MS, 0.9), (G::DECAY_B, 1.6), (G::CRACK_DB, -3.0), (G::CRACK_HZ, 3300.0), (G::CRACK_MS, 14.0), (G::TURB_DB, -5.0), (G::TURB_MS, 120.0), (G::TURB_LP, 6000.0), (G::BODY_DB, -7.0), (G::BODY_HZ, 72.0), (G::BODY_MS, 150.0), (G::SUB_DB, -10.0), (G::SUB_HZ, 46.0), (G::SUB_MS, 140.0), (G::DRIVE_DB, 12.0)]),
-        ("rifle556_10in", vec![(G::PEAK_SPL, 163.0), (G::POS_MS, 1.1), (G::DECAY_B, 1.5), (G::CRACK_DB, -2.0), (G::CRACK_HZ, 2900.0), (G::CRACK_MS, 20.0), (G::TURB_DB, -3.0), (G::TURB_MS, 190.0), (G::TURB_LP, 5000.0), (G::BODY_DB, -5.0), (G::BODY_HZ, 60.0), (G::BODY_MS, 200.0), (G::SUB_DB, -7.0), (G::SUB_HZ, 42.0), (G::SUB_MS, 170.0), (G::DRIVE_DB, 14.0)]),
-        ("rifle308_bolt", vec![(G::PEAK_SPL, 163.0), (G::POS_MS, 1.4), (G::DECAY_B, 1.3), (G::CRACK_DB, -6.0), (G::CRACK_HZ, 2200.0), (G::CRACK_MS, 22.0), (G::TURB_DB, -6.0), (G::TURB_MS, 160.0), (G::TURB_LP, 4200.0), (G::BODY_DB, -4.0), (G::BODY_HZ, 50.0), (G::BODY_MS, 260.0), (G::SUB_DB, -5.0), (G::SUB_HZ, 35.0), (G::SUB_MS, 220.0), (G::DRIVE_DB, 13.0)]),
-        ("pistol9mm", vec![(G::PEAK_SPL, 157.0), (G::POS_MS, 0.6), (G::DECAY_B, 1.6), (G::CRACK_DB, -2.0), (G::CRACK_HZ, 1800.0), (G::CRACK_MS, 26.0), (G::TURB_DB, -7.0), (G::TURB_MS, 90.0), (G::TURB_LP, 4500.0), (G::BODY_DB, -6.0), (G::BODY_HZ, 95.0), (G::BODY_MS, 110.0), (G::SUB_DB, -14.0), (G::SUB_HZ, 55.0), (G::SUB_MS, 90.0), (G::DRIVE_DB, 11.0), (G::DIRECTIVITY_DB, 6.0), (G::REAR_LP_HZ, 6500.0)]),
+        ("rifle556_16in", vec![(G::PEAK_SPL, 160.0), (G::POS_MS, 0.9), (G::DECAY_B, 1.6), (G::CRACK_DB, -2.0), (G::CRACK_HZ, 4200.0), (G::CRACK_MS, 8.0), (G::TURB_DB, -5.0), (G::TURB_MS, 360.0), (G::TURB_HP, 150.0), (G::TURB_LP, 6500.0), (G::BODY_DB, -9.0), (G::BODY_HZ, 70.0), (G::BODY_MS, 320.0), (G::BODY_DROP, 0.4), (G::SUB_DB, -12.0), (G::SUB_HZ, 44.0), (G::SUB_MS, 420.0), (G::DRIVE_DB, 12.0), (G::REAR_LP_HZ, 5000.0)]),
+        ("rifle556_10in", vec![(G::PEAK_SPL, 163.0), (G::POS_MS, 1.1), (G::DECAY_B, 1.5), (G::CRACK_DB, -1.0), (G::CRACK_HZ, 3800.0), (G::CRACK_MS, 10.0), (G::TURB_DB, -3.0), (G::TURB_MS, 380.0), (G::TURB_HP, 140.0), (G::TURB_LP, 5500.0), (G::BODY_DB, -7.0), (G::BODY_HZ, 60.0), (G::BODY_MS, 380.0), (G::BODY_DROP, 0.4), (G::SUB_DB, -9.0), (G::SUB_HZ, 42.0), (G::SUB_MS, 480.0), (G::DRIVE_DB, 14.0), (G::DIRECTIVITY_DB, 7.0), (G::REAR_LP_HZ, 6500.0)]),
+        ("rifle308_bolt", vec![(G::PEAK_SPL, 163.0), (G::POS_MS, 1.4), (G::DECAY_B, 1.3), (G::CRACK_DB, -4.0), (G::CRACK_HZ, 2600.0), (G::CRACK_MS, 12.0), (G::TURB_DB, -5.0), (G::TURB_MS, 360.0), (G::TURB_HP, 110.0), (G::TURB_LP, 4800.0), (G::BODY_DB, -6.0), (G::BODY_HZ, 50.0), (G::BODY_MS, 450.0), (G::SUB_DB, -7.0), (G::SUB_HZ, 34.0), (G::SUB_MS, 560.0), (G::DRIVE_DB, 13.0), (G::DIRECTIVITY_DB, 10.0), (G::REAR_LP_HZ, 4500.0)]),
+        ("pistol9mm", vec![(G::PEAK_SPL, 157.0), (G::POS_MS, 0.6), (G::DECAY_B, 1.7), (G::CRACK_DB, -1.0), (G::CRACK_HZ, 2300.0), (G::CRACK_MS, 7.0), (G::TURB_DB, -6.0), (G::TURB_MS, 200.0), (G::TURB_HP, 200.0), (G::TURB_LP, 6000.0), (G::BODY_DB, -12.0), (G::BODY_HZ, 100.0), (G::BODY_MS, 170.0), (G::BODY_DROP, 0.5), (G::SUB_DB, -20.0), (G::SUB_HZ, 55.0), (G::SUB_MS, 160.0), (G::DRIVE_DB, 11.0), (G::DIRECTIVITY_DB, 6.0), (G::REAR_LP_HZ, 7000.0), (G::PRECURSOR_DB, -20.0)]),
     ]
 }
 
@@ -56,7 +58,7 @@ fn main() {
             hd[S::PX] = 0.05; hd[S::PX + 1] = -0.08; hd[S::PX + 2] = -0.75;
             hd[S::DX + 2] = -1.0;
             hd[S::DIRECTIVITY_DB] = p[G::DIRECTIVITY_DB]; hd[S::REAR_LP_HZ] = p[G::REAR_LP_HZ];
-            hd[S::MIN_DIST] = 0.1; hd[S::REVERB_SEND_DB] = -29.5; hd[S::SPATIAL] = 1.0;
+            hd[S::MIN_DIST] = 0.1; hd[S::REVERB_SEND_DB] = -18.0; hd[S::SPATIAL] = 1.0; // covered firing point send
             hd.extend_from_slice(&p);
             cmd(&mut e, op::SPAWN, &hd);
             let mut l = Vec::new();

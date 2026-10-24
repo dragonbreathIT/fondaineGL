@@ -32,13 +32,14 @@ pub mod gunshot {
     pub const SUB_DB: usize = 25;
     pub const SUB_HZ: usize = 26;
     pub const SUB_MS: usize = 27;
-    /// Perceptual compaction: the instantaneous spike is soft-clipped this many dB below its peak, so the
-    /// energy-bearing body/roar carry the loudness (a real shot is felt over ~100 ms, not 1 ms).
+    /// Perceptual compaction: the instantaneous blast spike (and only the spike — body, sub, roar and crack are
+    /// summed after it) is soft-clipped this many dB below its peak, so the energy-bearing layers carry the
+    /// loudness (a real shot is felt over ~100 ms, not 1 ms).
     pub const DRIVE_DB: usize = 28;
     pub const COUNT: usize = 29;
     pub const DEFAULTS: [f32; COUNT] = [
-        158.0, 1.0, 1.4, -14.0, 0.35, -5.0, 140.0, 180.0, 4500.0, -6.0, 62.0, 160.0, 0.35, 0.0, 28.0, 0.0, 0.5, 0.0,
-        16000.0, 9.0, 4500.0, 0.0, -4.0, 2600.0, 18.0, -9.0, 40.0, 150.0, 10.0,
+        158.0, 1.0, 1.4, -14.0, 0.35, -6.0, 260.0, 120.0, 5500.0, -11.0, 62.0, 280.0, 0.35, 0.0, 28.0, 0.0, 0.5, 0.0,
+        16000.0, 9.0, 4500.0, 0.0, -4.0, 3400.0, 10.0, -13.0, 40.0, 360.0, 12.0,
     ];
 }
 
@@ -55,8 +56,12 @@ pub mod noise {
     pub const GRAIN_DB: usize = 9;
     pub const SEED: usize = 10;
     pub const RESONANCE: usize = 11;
-    pub const COUNT: usize = 12;
-    pub const DEFAULTS: [f32; COUNT] = [120.0, 0.5, 120.0, 200.0, 5000.0, 90.0, -6.0, 60.0, 0.0, -10.0, 0.0, 0.7];
+    /// Optional second transient (two-stage clicks, bounces): re-triggers the envelope `HIT2_MS` after the first
+    /// at `HIT2_DB` relative level. `HIT2_DB` <= -100 disables it.
+    pub const HIT2_MS: usize = 12;
+    pub const HIT2_DB: usize = 13;
+    pub const COUNT: usize = 14;
+    pub const DEFAULTS: [f32; COUNT] = [120.0, 0.5, 120.0, 200.0, 5000.0, 90.0, -6.0, 60.0, 0.0, -10.0, 0.0, 0.7, 0.0, -200.0];
 }
 
 pub mod hearing {
@@ -78,9 +83,14 @@ pub mod hearing {
     pub const REFLEX_RELEASE_MS: usize = 15;
     pub const MUFFLE_AMOUNT: usize = 16;
     pub const ENABLE: usize = 17;
-    pub const COUNT: usize = 18;
+    /// Fast post-impulse dulling: after every impulse over TTS_THRESHOLD the highs above ~3–4 kHz drop and
+    /// recover with this time constant (ms) — distinct from the slow, accumulating TTS.
+    pub const DULL_RECOVERY_MS: usize = 18;
+    /// Lowpass cutoff (Hz) at full dulling.
+    pub const DULL_HZ: usize = 19;
+    pub const COUNT: usize = 20;
     pub const DEFAULTS: [f32; COUNT] = [
-        0.0, 25.0, 10.0, 6.0, 82.0, 130.0, 0.15, 18.0, 25.0, 4200.0, -80.0, 12.0, 95.0, 5.0, 90.0, 600.0, 0.6, 1.0,
+        0.0, 25.0, 10.0, 6.0, 82.0, 130.0, 0.15, 18.0, 10.0, 5200.0, -30.0, 12.0, 95.0, 6.0, 90.0, 900.0, 1.0, 1.0, 350.0, 4000.0,
     ];
 }
 
@@ -108,9 +118,16 @@ pub mod master {
     pub const CLIP_KNEE_DB: usize = 19;
     /// Make-up gain after the loudness compressor (dB).
     pub const MAKEUP_DB: usize = 20;
-    pub const COUNT: usize = 21;
+    /// Overload saturator asymmetry (0 symmetric … 1 positive half-cycles clip much earlier): even harmonics,
+    /// the "crunch" of an overdriven ear / camera limiter.
+    pub const SAT_ASYM: usize = 21;
+    /// Overload dulling: while the saturator is driven, a lowpass drops towards this cutoff (Hz) …
+    pub const SAT_DULL_HZ: usize = 22;
+    /// … and recovers with this time constant (ms) — the brief HF loss right after an overload.
+    pub const SAT_DULL_MS: usize = 23;
+    pub const COUNT: usize = 24;
     pub const DEFAULTS: [f32; COUNT] = [
-        100.0, -20.0, 3.2, 8.0, 5.0, 180.0, -0.5, 30.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0875, 1.0, 15.0, -5.0, 0.0,
+        112.0, -6.0, 2.6, 6.0, 0.3, 90.0, -0.3, 12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0875, 1.0, 2.0, -4.0, 0.0, 0.5, 4500.0, 45.0,
     ];
 }
 

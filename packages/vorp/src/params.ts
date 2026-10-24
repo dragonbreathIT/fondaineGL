@@ -21,13 +21,13 @@ export const GUNSHOT_PARAMS: ParamSpec[] = [
   p('decayB', 'Blast decay (b)', 1.4, 0.3, 5, '', 'Friedlander waveform decay constant. Higher = sharper, smaller negative phase.', 0.01),
   p('precursorDb', 'Precursor', -14, -60, 0, 'dB', 'Level of the precursor shock (air column ahead of the bullet) relative to the main blast.'),
   p('precursorLeadMs', 'Precursor lead', 0.35, 0, 2, 'ms', 'How far the precursor leads the main blast.', 0.01),
-  p('turbDb', 'Gas plume roar', -5, -60, 0, 'dB', 'Turbulent propellant-gas noise relative to the blast peak.'),
-  p('turbMs', 'Roar decay (T60)', 140, 2, 400, 'ms', 'Time for the gas roar to fall 60 dB.'),
-  p('turbHp', 'Roar highpass', 180, 20, 2000, 'Hz'),
-  p('turbLp', 'Roar lowpass', 4500, 500, 16000, 'Hz'),
-  p('bodyDb', 'Body (perceived boom)', -6, -60, 0, 'dB', 'Low-frequency chest/room "boom". −60 for a purely measured (thin) signature.'),
+  p('turbDb', 'Gas plume roar', -6, -60, 0, 'dB', 'Turbulent propellant-gas noise relative to the blast peak.'),
+  p('turbMs', 'Roar decay (T60)', 260, 2, 800, 'ms', 'Time for the gas roar to fall 60 dB (a quieter late tail at 3× this follows).'),
+  p('turbHp', 'Roar highpass', 120, 20, 2000, 'Hz'),
+  p('turbLp', 'Roar lowpass', 5500, 500, 16000, 'Hz'),
+  p('bodyDb', 'Body (perceived boom)', -11, -60, 0, 'dB', 'Low-frequency chest/room "boom" (two partials with a soft-saturated attack). −60 for a purely measured (thin) signature.'),
   p('bodyHz', 'Body frequency', 62, 20, 400, 'Hz'),
-  p('bodyMs', 'Body decay (T60)', 160, 5, 1000, 'ms'),
+  p('bodyMs', 'Body decay (T60)', 280, 5, 1000, 'ms'),
   p('bodyDrop', 'Body pitch drop', 0.35, 0, 2, '', 'Initial pitch overshoot that glides down to the body frequency.', 0.01),
   p('suppress', 'Suppressor', 0, 0, 1, '', 'Suppressor amount (0 none … 1 full can).', 0.01),
   p('suppRedDb', 'Suppressor reduction', 28, 0, 45, 'dB', 'Peak reduction a full suppressor provides (good cans: 25–35 dB).'),
@@ -39,12 +39,12 @@ export const GUNSHOT_PARAMS: ParamSpec[] = [
   p('rearLpHz', 'Rear darkening', 4500, 200, 20000, 'Hz', 'Lowpass applied towards the rear of the muzzle (shooter’s own ears are rear-ish).'),
   p('tailSendDb', 'Environment send', 0, -40, 12, 'dB', 'Adjusts how much this weapon excites reflections / reverb.'),
   p('crackDb', 'Report (snap)', -4, -90, 6, 'dB', 'Sharp band-limited report burst that gives each gun its character (relative to the blast peak).'),
-  p('crackHz', 'Report pitch', 2600, 300, 9000, 'Hz', 'Pistols ≈ 1.5–2 kHz (pop), 5.56 ≈ 3–3.5 kHz (crack), big rifles ≈ 2 kHz.'),
-  p('crackMs', 'Report decay (T60)', 18, 1, 200, 'ms'),
-  p('subDb', 'Sub thump', -9, -90, 6, 'dB', 'Sub-bass pressure pulse you feel in your chest (relative to the blast peak).'),
+  p('crackHz', 'Report pitch', 3400, 300, 9000, 'Hz', 'Pistols ≈ 2–2.5 kHz (hard snap), 5.56 ≈ 4–5 kHz (crack), big rifles ≈ 2.5 kHz.'),
+  p('crackMs', 'Report decay (T60)', 10, 1, 200, 'ms'),
+  p('subDb', 'Sub thump', -13, -90, 6, 'dB', 'Sub-bass pressure pulse you feel in your chest (relative to the blast peak).'),
   p('subHz', 'Sub frequency', 40, 15, 150, 'Hz'),
-  p('subMs', 'Sub decay (T60)', 150, 5, 1000, 'ms'),
-  p('driveDb', 'Spike compaction', 10, 0, 30, 'dB', 'Soft-clips the instantaneous blast spike this far below its peak so the 50–300 ms body carries the loudness (how a shot feels, not how a microphone peaks).'),
+  p('subMs', 'Sub decay (T60)', 360, 5, 1000, 'ms'),
+  p('driveDb', 'Spike compaction', 12, 0, 30, 'dB', 'Soft-clips the instantaneous blast spike (only the spike) this far below its peak so the 50–300 ms body carries the loudness (how a shot feels, not how a microphone peaks).'),
 ];
 
 export const NOISE_PARAMS: ParamSpec[] = [
@@ -60,6 +60,8 @@ export const NOISE_PARAMS: ParamSpec[] = [
   p('grainDb', 'Grain level', -10, -60, 6, 'dB'),
   p('seed', 'Seed', 0, 0, 100000, '', '', 1),
   p('resonance', 'Filter Q', 0.7, 0.3, 8, '', '', 0.01),
+  p('hit2Ms', 'Second hit delay', 0, 0, 500, 'ms', 'Two-stage clicks / bounces: the envelope re-triggers this long after the first hit.'),
+  p('hit2Db', 'Second hit level', -200, -200, 12, 'dB', 'Relative to the first hit; −200 = none.'),
 ];
 
 export const HEARING_PARAMS: ParamSpec[] = [
@@ -71,27 +73,29 @@ export const HEARING_PARAMS: ParamSpec[] = [
   p('ttsThresholdSpl', 'Damage threshold (peak)', 130, 110, 150, 'dB SPL', 'Impulses above this cause a temporary threshold shift.'),
   p('ttsRate', 'TTS rate', 0.15, 0, 2, 'dB/dB', 'dB of threshold shift per dB above threshold per impulse.', 0.01),
   p('ttsMaxDb', 'Max TTS', 18, 0, 60, 'dB'),
-  p('ttsRecoveryS', 'Recovery time constant', 25, 0.5, 600, 's', 'Real-world recovery takes hours; games use 10–60 s.'),
-  p('tinnitusHz', 'Tinnitus frequency', 4200, 1000, 12000, 'Hz'),
-  p('tinnitusDb', 'Tinnitus level', -80, -80, -6, 'dBFS', 'Ear ringing after loud exposure. −80 = off (default). ≈ −40 is a realistic ring.'),
+  p('ttsRecoveryS', 'Recovery time constant', 10, 0.5, 600, 's', 'Real-world recovery takes hours; games use 10–60 s.'),
+  p('tinnitusHz', 'Tinnitus frequency', 5200, 1000, 12000, 'Hz'),
+  p('tinnitusDb', 'Tinnitus level', -30, -80, -6, 'dBFS', 'Ear ringing after loud exposure, at full TTS. −80 = off. −30 is a loud, obvious ring after a burst.'),
   p('tinnitusTtsDb', 'Tinnitus full at TTS', 12, 1, 40, 'dB'),
   p('reflexThresholdSpl', 'Acoustic reflex threshold', 95, 70, 120, 'dB SPL'),
-  p('reflexMaxDb', 'Reflex max attenuation', 5, 0, 30, 'dB'),
+  p('reflexMaxDb', 'Reflex max attenuation', 6, 0, 30, 'dB'),
   p('reflexAttackMs', 'Reflex latency', 90, 5, 300, 'ms'),
-  p('reflexReleaseMs', 'Reflex release', 600, 50, 5000, 'ms'),
-  p('muffle', 'Muffling amount', 0.6, 0, 2, '', 'How strongly TTS dulls and quiets hearing.', 0.01),
+  p('reflexReleaseMs', 'Reflex release', 900, 50, 5000, 'ms'),
+  p('muffle', 'Muffling amount', 1.0, 0, 2, '', 'How strongly TTS dulls and quiets hearing.', 0.01),
   p('enable', 'Hearing model', 1, 0, 1, '', '', 1),
+  p('dullRecoveryMs', 'Post-shot dulling recovery', 350, 20, 3000, 'ms', 'After every impulse over the damage threshold the highs drop for a moment and recover with this time constant.'),
+  p('dullHz', 'Dulling cutoff', 4000, 800, 12000, 'Hz', 'Lowpass cutoff at full post-shot dulling.'),
 ];
 
 export const MASTER_PARAMS: ParamSpec[] = [
-  p('calibrationSpl', 'Calibration (SPL @ 0 dBFS)', 100, 70, 140, 'dB SPL', 'Acoustic level that maps to digital full scale before dynamics. Lower = everything louder.'),
-  p('compThresholdDb', 'Loudness threshold', -20, -60, 0, 'dBFS'),
-  p('compRatio', 'Loudness ratio', 3.2, 1, 20, ':1', 'Perceptual compression of the 110+ dB real-world range into a playable range.', 0.1),
-  p('compKneeDb', 'Knee', 8, 0, 24, 'dB'),
-  p('compAttackMs', 'Attack', 5, 0.1, 100, 'ms', '', 0.1),
-  p('compReleaseMs', 'Release', 180, 10, 3000, 'ms', 'How long the world stays ducked after a shot.'),
-  p('limitCeilingDb', 'Limiter ceiling', -0.5, -12, 0, 'dBFS', '', 0.1),
-  p('limitReleaseMs', 'Limiter release', 30, 1, 500, 'ms'),
+  p('calibrationSpl', 'Calibration (SPL @ 0 dBFS)', 112, 70, 140, 'dB SPL', 'Acoustic level that maps to digital full scale before dynamics. Lower = everything louder. 112 keeps footsteps/casings 35–40 dB under a shot.'),
+  p('compThresholdDb', 'Loudness threshold', -6, -60, 0, 'dBFS'),
+  p('compRatio', 'Loudness ratio', 2.6, 1, 20, ':1', 'Perceptual compression of the 110+ dB real-world range into a playable range. Only shots and very close impacts cross the threshold.', 0.1),
+  p('compKneeDb', 'Knee', 6, 0, 24, 'dB'),
+  p('compAttackMs', 'Attack', 0.3, 0.05, 100, 'ms', 'Fast: every onset is measured on its own level, so full-auto shots never duck each other.', 0.05),
+  p('compReleaseMs', 'Release', 90, 10, 3000, 'ms', 'Release after a brief peak; sustained loudness releases ≈ 4× slower (program-dependent), so the world stays ducked after a shot and recovers smoothly.'),
+  p('limitCeilingDb', 'Limiter ceiling', -0.3, -12, 0, 'dBFS', '', 0.1),
+  p('limitReleaseMs', 'Limiter release', 12, 1, 500, 'ms', 'Release after an isolated peak (sustained limiting releases slower).'),
   p('masterDb', 'Master volume', 0, -60, 12, 'dB'),
   p('busWeaponsDb', 'Weapons bus', 0, -60, 12, 'dB'),
   p('busImpactsDb', 'Impacts bus', 0, -60, 12, 'dB'),
@@ -102,9 +106,12 @@ export const MASTER_PARAMS: ParamSpec[] = [
   p('convMix', 'Convolution mix', 0, 0, 1, '', '0 = algorithmic FDN, 1 = convolution IR', 0.01),
   p('headRadiusM', 'Head radius', 0.0875, 0.06, 0.12, 'm', '', 0.0005),
   p('spatialEnable', 'Binaural', 1, 0, 1, '', '', 1),
-  p('compDetectorMs', 'Loudness integration', 15, 0, 100, 'ms', 'RMS window of the loudness detector (0 = peak).'),
-  p('clipKneeDb', 'Saturation knee', -5, -24, -0.1, 'dBFS', 'Above this, the output saturates smoothly towards full scale: density instead of a 1 ms tick under a limiter.', 0.1),
+  p('compDetectorMs', 'Loudness integration', 2, 0, 100, 'ms', 'RMS window of the loudness detector (0 = peak).'),
+  p('clipKneeDb', 'Saturation knee', -4, -24, -0.1, 'dBFS', 'Above this, the output saturates smoothly towards full scale: density instead of a 1 ms tick under a limiter.', 0.1),
   p('makeupDb', 'Make-up gain', 0, -12, 24, 'dB', 'Overall loudness after the perceptual compressor. Raise for an even louder mix.'),
+  p('satAsym', 'Saturation asymmetry', 0.5, 0, 1, '', 'Positive half-cycles clip earlier than negative ones (even harmonics: the crunch of an overdriven ear / camera limiter).', 0.01),
+  p('satDullHz', 'Overload dulling cutoff', 4500, 800, 16000, 'Hz', 'While the saturator is driven a lowpass drops towards this cutoff — the brief HF loss right after an overload.'),
+  p('satDullMs', 'Overload dulling recovery', 45, 2, 500, 'ms'),
 ];
 
 export const REVERB_PARAMS: ParamSpec[] = [
@@ -147,7 +154,7 @@ export const SPAWN = {
 export const BUS = { WEAPONS: 0, IMPACTS: 1, ENV: 2, UI: 3 } as const;
 
 export const METER = {
-  PEAK_L: 0, PEAK_R: 1, SCENE_SPL: 2, TTS: 3, COMP_GR: 4, LIMIT_GR: 5, VOICES: 6, REFLEX_GR: 7, TINNITUS: 8, EAR_SPL: 9, SPEED_OF_SOUND: 10, TIME: 11, MAX_EAR_SPL: 12,
+  PEAK_L: 0, PEAK_R: 1, SCENE_SPL: 2, TTS: 3, COMP_GR: 4, LIMIT_GR: 5, VOICES: 6, REFLEX_GR: 7, TINNITUS: 8, EAR_SPL: 9, SPEED_OF_SOUND: 10, TIME: 11, MAX_EAR_SPL: 12, SAT_CUTOFF_HZ: 13,
 } as const;
 
 /** Builds a parameter array from defaults + named overrides. */
