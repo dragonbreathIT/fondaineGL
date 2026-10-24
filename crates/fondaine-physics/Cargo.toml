@@ -1,0 +1,13 @@
+[package]
+name = "fondaine-physics"
+version = "0.1.0"
+edition = "2021"
+description = "fondaine physics core: static BVH, ray queries, sky-visibility bake, character controller, rigid bodies, external ballistics. Plain C ABI for wasm32."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]

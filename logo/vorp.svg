@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="vorp">
+  <title>vorp</title>
+  <rect width="256" height="256" rx="48" fill="#0e0f11"/>
+  <!-- a Friedlander blast wave: instant shock, decay, negative phase -->
+  <path d="M28 150 L70 150 L70 46 C86 104 100 150 122 168 C140 182 160 172 182 158 C200 150 214 150 228 150" fill="none" stroke="#f3b23a" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="128" y="226" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="38" font-weight="700" fill="#f2f3f5" letter-spacing="4">vorp</text>
+</svg>

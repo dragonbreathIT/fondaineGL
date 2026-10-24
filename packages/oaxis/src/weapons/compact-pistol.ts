@@ -1,0 +1,405 @@
+// "C15 Compact": an original compact 9×19 polymer-frame, striker-fired pistol (fondaine design).
+// Class-typical dimensions: 102 mm barrel, ≈186 mm overall, ≈127 mm tall with the magazine, 25.5 mm slide,
+// 15+1 rounds, ≈0.84 kg loaded. Everything is modelled at real scale in weapon space
+// (+x right, +y up, −z towards the muzzle, bore on y = 0, breech face at z ≈ −0.003).
+//
+// Design language (deliberately not a copy of any production pistol): tall 45° slide chamfers with a wide top
+// flat, forward-raked front + rear serrations cut 0.6 mm into the slide, a squared ejection port with the
+// extractor let into the right flat, a flat-faced trigger with a centre safety blade, a high undercut trigger
+// guard, a wrap-around textured grip module with two shallow finger reliefs, and a flat beavertail.
+//
+// Animated groups:
+//   slide (bolt)   – cycles 34 mm per shot, locks open on an empty magazine, slams home on slide release
+//   magazine       – drops free on reload (spawned as a physics body), new one is inserted
+//   trigger        – travels back when pulled
+//   selector       – the slide-mounted fire-mode lever (SAFE / SEMI / AUTO) rotates about x
+// The barrel stays in the frame, so with the slide locked back it sticks out of the nose like a real one.
+
+import { Material, Mesh, Renderer, Geometry, lathe, vec3, box, roundedBox, extrude } from '@fondaine/gl';
+import { GUNSHOTS } from '@fondaine/vorp';
+import { FirearmModel, FirearmSpec, CALIBERS, casingGeometry } from '@fondaine/gl';
+import { OAXIS, seg } from '../tuning';
+import { PartBuilder, side, section, tubeZ, tubeX, tubeY, discZ, latheZ, P2, Prof, Profile, loft, prism, groovedLoft, rrect, Station, screwHeadX } from './build';
+import { engravingMaterial, engravingQuadX } from './engrave';
+import type { WeaponGrips } from '../viewmodel/hands';
+
+export interface WeaponBuild { model: FirearmModel; spec: FirearmSpec; grips?: WeaponGrips; /** build statistics */ stats?: { triangles: number; buildMs: number } }
+
+export interface CompactPistolOptions {
+  /** Procedural texture resolution (px). */
+  textureSize?: number;
+  /** Slide finish colour (linear RGB). Default: black nitride. */
+  slideColor?: [number, number, number];
+  /** Frame polymer colour (linear RGB). Default: black. Try [0.16, 0.13, 0.09] for FDE, [0.06, 0.07, 0.05] for OD. */
+  frameColor?: [number, number, number];
+  /** Front sight insert: 'tritium' (green, glows) or 'white'. */
+  frontSight?: 'tritium' | 'white';
+  /** Roll marks on the slide / frame (default on; needs a 2D canvas). */
+  engravings?: boolean;
+}
+
+// ---------------------------------------------------------------------------------------------- dimensions
+export const C15 = {
+  slideRear: 0.088,       // z of the slide's rear face
+  slideFront: -0.0975,    // z of the slide nose (muzzle crown flush)
+  slideTop: 0.0165,       // y of the slide's top flat
+  slideBottom: -0.0115,
+  slideWidth: 0.0255,
+  frameWidth: 0.0265,
+  sightLine: 0.0225,      // y of the front post top / rear notch top
+  rearSightZ: 0.082,      // rear face of the rear sight (towards the eye)
+  frontSightZ: -0.088,
+  slideTravel: 0.034,
+  portZ0: -0.003, portZ1: -0.040, // ejection port opening along z (in battery)
+} as const;
+
+const TAU = Math.PI * 2;
+
+/** Slide cross-section (CCW, fixed point count so every station morphs into every other). */
+function slideProfile(o: { hw?: number; yb?: number; yt?: number; chamfer?: number; grooveL?: number; grooveR?: number; port?: boolean; xin?: number; portFloor?: number }): Profile {
+  const D = C15;
+  const hw = o.hw ?? D.slideWidth / 2, yb = o.yb ?? D.slideBottom, yt = o.yt ?? D.slideTop, c = o.chamfer ?? 0.0042;
+  const rf = 0.0007, rc = 0.0005, n = 2;
+  const yLo = -0.0055, yHiFull = 0.0105;
+  const gR = o.grooveR ?? 0, gL = o.grooveL ?? 0;
+  const port = !!o.port, xin = o.xin ?? -hw + 0.0075, pf = o.portFloor ?? -0.0005;
+  const yHiR = port ? pf : yHiFull;
+  const p = new Prof();
+  // bottom-right fillet
+  p.arc(hw - rf, yb + rf, rf, -Math.PI / 2, 0, n);
+  // right wall with the serration recess band
+  p.pt(hw, yLo).pt(hw - gR, yLo).pt(hw - gR, yHiR).pt(hw, yHiR);
+  // wall → chamfer fillet (45°): tangent length t = rc·tan(22.5°)
+  const t = rc * Math.tan(Math.PI / 8);
+  const s2 = Math.SQRT1_2;
+  const cornerArc = (cx: number, cy: number, inDir: [number, number], outDir: [number, number]) => {
+    // fillet between incoming direction and outgoing direction at corner (cx, cy)
+    const p0: P2 = [cx - inDir[0] * t, cy - inDir[1] * t], p1: P2 = [cx + outDir[0] * t, cy + outDir[1] * t];
+    // centre: offset from p0 along the inward normal of inDir (left normal for CCW)
+    const nl: [number, number] = [-inDir[1], inDir[0]];
+    const ctr: P2 = [p0[0] + nl[0] * rc, p0[1] + nl[1] * rc];
+    const a0 = Math.atan2(p0[1] - ctr[1], p0[0] - ctr[0]), a1 = Math.atan2(p1[1] - ctr[1], p1[0] - ctr[0]);
+    let da = a1 - a0; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+    p.arc(ctr[0], ctr[1], rc, a0, a0 + da, n);
+  };
+  if (port) { for (let k = 0; k <= n; k++) p.pt(hw, pf); for (let k = 0; k <= n; k++) p.pt(xin, pf); }
+  else { cornerArc(hw, yt - c, [0, 1], [-s2, s2]); cornerArc(hw - c, yt, [-s2, s2], [-1, 0]); }
+  p.pt(xin, yt, !port);
+  cornerArc(-hw + c, yt, [-1, 0], [-s2, -s2]);
+  cornerArc(-hw, yt - c, [-s2, -s2], [0, -1]);
+  p.pt(-hw, yHiFull).pt(-hw + gL, yHiFull).pt(-hw + gL, yLo).pt(-hw, yLo);
+  p.arc(-hw + rf, yb + rf, rf, Math.PI, Math.PI * 1.5, n);
+  return p.done();
+}
+
+/** Grip cross-section at depth d below the frame top: (x, z) rounded box with a soft front strap, palm swell + reliefs. */
+function gripProfile(d: number, flare = 0): Profile {
+  const t = (d - 0.028) / (0.1165 - 0.028);
+  // front strap (towards the trigger guard) and back strap z, both raked
+  let zF = 0.0185 + 0.0229 * t, zB = 0.0725 + 0.0161 * t;
+  // two shallow finger reliefs on the front strap (middle + ring finger), 0.7 mm deep
+  zF += 0.0007 * (Math.exp(-((d - 0.067) ** 2) / (2 * 0.006 ** 2)) + Math.exp(-((d - 0.089) ** 2) / (2 * 0.006 ** 2)));
+  // palm swell on the back strap, concave web under the beavertail
+  zB += 0.0016 * Math.exp(-((d - 0.078) ** 2) / (2 * 0.014 ** 2)) - 0.0006 * Math.exp(-((d - 0.034) ** 2) / (2 * 0.008 ** 2));
+  let hw = 0.0128 + 0.0021 * Math.sin(Math.PI * Math.min(1, Math.max(0, (d - 0.03) / 0.09))) ** 0.7;
+  hw += flare; zF -= flare * 0.6; zB += flare * 0.8;
+  const rf = Math.min(0.0098, hw - 0.0012), rb = Math.min(0.0068, hw - 0.0012);
+  const p = new Prof();
+  p.arc(hw - rf, zF + rf, rf, -Math.PI / 2, 0, 5);
+  p.arc(hw - rb, zB - rb, rb, 0, Math.PI / 2, 4);
+  p.arc(-hw + rb, zB - rb, rb, Math.PI / 2, Math.PI, 4);
+  p.arc(-hw + rf, zF + rf, rf, Math.PI, Math.PI * 1.5, 5);
+  return p.done();
+}
+
+export function buildCompactPistol(renderer: Renderer, o: CompactPistolOptions = {}): WeaponBuild {
+  const t0 = performance.now();
+  const synth = renderer.synth;
+  const size = o.textureSize ?? OAXIS.textureSize;
+  const small = Math.min(size, 1024), tiny = Math.min(size, 512);
+  const D = C15;
+
+  // ------------------------------------------------------------------ materials (physically based, procedural)
+  const nitride = synth.material('nitride', { size, tileMeters: 0.12, color: o.slideColor ?? [0.036, 0.037, 0.04], wear: 0.18, roughness: 0.4, seed: 41, bumpMm: 0.004 }, { name: 'c15-slide-nitride', edgeWear: 0.75, edgeWearRadius: 0.0028 });
+  const barrelSteel = synth.material('machined', { size: small, tileMeters: 0.05, color: [0.4, 0.4, 0.41], wear: 0.3, roughness: 0.42, seed: 42, extra: 1 }, { name: 'c15-barrel', edgeWear: 0.3 });
+  const frameColor = o.frameColor ?? [0.03, 0.03, 0.032];
+  const frame = synth.material('polymer', { size, tileMeters: 0.12, color: frameColor, extra: 0.35, roughness: 0.56, bumpMm: 0.12, seed: 43 }, { name: 'c15-frame', edgeWear: 0.3, edgeWearRadius: 0.0025 });
+  const stipple = synth.material('polymer', { size, tileMeters: 0.16, color: frameColor, extra: 0.97, roughness: 0.62, bumpMm: 0.4, seed: 44 }, { name: 'c15-stipple', edgeWear: 0.2 });
+  const steelBlack = synth.material('parkerized', { size: small, tileMeters: 0.06, color: [0.02, 0.02, 0.021], wear: 0.12, seed: 45 }, { name: 'c15-steel-black', edgeWear: 0.5, edgeWearRadius: 0.002 });
+  const park = synth.material('parkerized', { size: small, tileMeters: 0.05, color: [0.045, 0.046, 0.045], wear: 0.3, seed: 46 }, { name: 'c15-parkerized', edgeWear: 0.6, edgeWearRadius: 0.002 });
+  const pins = synth.material('machined', { size: tiny, tileMeters: 0.02, color: [0.3, 0.3, 0.31], wear: 0.4, seed: 47, extra: 0.4 }, { name: 'c15-pins' });
+  const magBody = synth.material('nitride', { size: small, tileMeters: 0.1, color: [0.034, 0.034, 0.036], wear: 0.3, roughness: 0.45, seed: 48 }, { name: 'c15-mag-body', edgeWear: 0.75, edgeWearRadius: 0.0025 });
+  const brass = synth.material('brass', { size: tiny, tileMeters: 0.03, seed: 49 }, { name: 'c15-brass' });
+  const white = new Material({ name: 'c15-sight-white', baseColor: [0.85, 0.85, 0.8, 1], roughness: 0.5, metallic: 0 });
+  const follower = new Material({ name: 'c15-follower', baseColor: [0.75, 0.22, 0.03, 1], roughness: 0.6, metallic: 0 });
+  const dark = new Material({ name: 'c15-cavity', baseColor: [0.02, 0.02, 0.02, 1], roughness: 0.9, metallic: 0.3 });
+  const tritium = o.frontSight === 'white'
+    ? white
+    : new Material({ name: 'c15-tritium', baseColor: [0.75, 0.9, 0.72, 1], roughness: 0.3, metallic: 0, emissive: [0.35, 1, 0.4], emissiveLuminance: 40 });
+
+  const P = new PartBuilder(renderer);
+  const SLIDE = { bolt: true };
+  const MAG = { magazine: true };
+  const hw = D.slideWidth / 2;
+
+  // ------------------------------------------------------------------ slide (moves): one lofted body
+  {
+    const full = slideProfile({});
+    const gLR = slideProfile({ grooveL: 0.0006, grooveR: 0.0006 });
+    const port = slideProfile({ port: true });
+    const rake = -0.16, rakeY = 0.0025;      // serration tops lean towards the muzzle
+    const st: Station[] = [];
+    // rear face with a bevelled top edge
+    st.push({ z: D.slideRear, prof: slideProfile({ yt: D.slideTop - 0.0035, chamfer: 0.0042 }) });
+    st.push({ z: D.slideRear - 0.0035, prof: full });
+    // rear serrations: 8 grooves, 1.5 mm wide, 3.4 mm pitch (both sides)
+    const groove = (z: number, prof: Profile) => st.push({ z, prof: full, shear: rake, shearY0: rakeY }, { z, prof, shear: rake, shearY0: rakeY }, { z: z - 0.0015, prof, shear: rake, shearY0: rakeY }, { z: z - 0.0015, prof: full, shear: rake, shearY0: rakeY });
+    for (let i = 0; i < 8; i++) groove(0.0775 - i * 0.0034, gLR);
+    // ejection port: right wall and top open from portZ0 to portZ1, relief notch at the rear
+    st.push({ z: D.portZ0 + 0.004, prof: full }, { z: D.portZ0 + 0.004, prof: slideProfile({ port: true, portFloor: 0.0075 }) });
+    st.push({ z: D.portZ0, prof: slideProfile({ port: true, portFloor: 0.0075 }) }, { z: D.portZ0, prof: port });
+    st.push({ z: D.portZ1, prof: port }, { z: D.portZ1, prof: full });
+    // front serrations: 5 grooves, both sides
+    for (let i = 0; i < 5; i++) groove(-0.0565 - i * 0.0034, gLR);
+    // nose: 4.5 mm top bevel, 7.5 mm bottom bevel, 2 mm plan chamfers
+    st.push({ z: -0.0905, prof: full });
+    st.push({ z: D.slideFront, prof: slideProfile({ yb: -0.0085, yt: 0.0118, hw: hw - 0.0022, chamfer: 0.0042 }) });
+    P.add(loft(st), nitride, SLIDE);
+    // muzzle opening + recoil-spring guide bore in the nose
+    P.add(discZ(0.0082, 0.0004, 0, 0, D.slideFront - 0.00015, seg(28)), dark, SLIDE);
+    P.add(discZ(0.0046, 0.0006, 0, -0.0068, D.slideFront - 0.00015, seg(20)), dark, SLIDE);
+    P.add(discZ(0.0031, 0.0012, 0, -0.0068, D.slideFront - 0.0002, seg(16)), park, SLIDE); // guide rod end
+    // breech face details on the port's rear wall (visible when locked back): firing pin hole + extractor claw
+    P.add(discZ(0.0011, 0.0005, 0.0006, 0.0, D.portZ0 + 0.0001, 10), dark, SLIDE);
+    // extractor: let into the right flat behind the port, slight proud tail (loaded-chamber indicator)
+    P.add(roundedBox(0.0012, 0.0046, 0.0205, 0.0004).translate(hw - 0.0004, 0.0048, D.portZ0 + 0.0105), park, SLIDE);
+    P.add(roundedBox(0.0009, 0.0028, 0.004, 0.0003).translate(hw + 0.0003, 0.0048, D.portZ0 + 0.0185), park, SLIDE);
+    // select-fire lever on the left rear (moves with the slide): up = SAFE, mid = SEMI, down = AUTO
+    P.add(tubeX(0.0029, 0.0014, -hw - 0.0001, 0.004, 0.074, seg(16)), park, { bolt: true, selector: true });
+    P.add(roundedBox(0.0018, 0.0115, 0.0046, 0.0008).translate(-hw - 0.0012, 0.004 + 0.0058, 0.074), park, { bolt: true, selector: true });
+    for (let i = 0; i < 4; i++) P.add(box(0.0004, 0.0004, 0.004).translate(-hw - 0.0021, 0.0065 + i * 0.0022, 0.074), steelBlack, { bolt: true, selector: true });
+    // rear cover plate with the striker channel + the striker tail
+    P.add(section(rrect(0.0178, 0.0218, 0.0018, 3, 0, 0.0018).pts, 0.0012, D.slideRear + 0.0006, 0.0004), park, SLIDE);
+    P.add(discZ(0.0028, 0.0004, 0.0, 0.0006, D.slideRear + 0.00125, 14), dark, SLIDE);
+    P.add(discZ(0.0017, 0.0007, 0.0, 0.0006, D.slideRear + 0.0013, 12), pins, SLIDE);
+    // rear sight: dovetailed steel block, serrated rear face, square notch, two white dots
+    const rsTop = D.sightLine, rsBase = D.slideTop - 0.0003, nw = 0.0019, nd = 0.0031;
+    const rsProf: P2[] = [[-0.0105, rsBase], [0.0105, rsBase], [0.0105, rsTop - 0.0014], [0.0094, rsTop], [nw, rsTop], [nw, rsTop - nd], [-nw, rsTop - nd], [-nw, rsTop], [-0.0094, rsTop], [-0.0105, rsTop - 0.0014]];
+    P.add(section(rsProf, 0.0092, D.rearSightZ - 0.0046, 0.0005), park, SLIDE);
+    for (let i = 0; i < 5; i++) P.add(box(0.0186, 0.0005, 0.0004).translate(0, rsBase + 0.0009 + i * 0.001, D.rearSightZ + 0.0001), steelBlack, SLIDE);
+    for (const sx of [-1, 1]) P.add(discZ(0.0012, 0.0004, sx * 0.0058, rsTop - 0.0021, D.rearSightZ + 0.0002), white, SLIDE);
+    // front sight: ramped post with a tritium insert in a white ring
+    P.add(side([[-D.frontSightZ - 0.0028, D.slideTop - 0.0003], [-D.frontSightZ + 0.0022, D.slideTop - 0.0003], [-D.frontSightZ + 0.0022, D.sightLine], [-D.frontSightZ - 0.001, D.sightLine]], 0.0036, 0.0003), park, SLIDE);
+    const fdY = D.sightLine - 0.0022;
+    P.add(discZ(0.0013, 0.0003, 0, fdY, D.frontSightZ + 0.00235), white, SLIDE);
+    P.add(discZ(0.00075, 0.0005, 0, fdY, D.frontSightZ + 0.00245), tritium, SLIDE);
+  }
+
+  // ------------------------------------------------------------------ barrel (stays in the frame): stainless
+  {
+    // chamber block with the hood filling the port; slightly right of centre like the real thing
+    const chamber = rrect(0.0168, 0.0246, 0.0042, 4, 0.0006, 0.0035);
+    P.add(prism(chamber, D.portZ0 - 0.0002, D.portZ1 - 0.003), barrelSteel);
+    // chamber mouth on the hood's rear face + feed ramp
+    P.add(discZ(0.0052, 0.0004, 0.0006, 0.0, D.portZ0 + 0.00005, seg(20)), dark);
+    // taper to the tube, tube to the crown
+    P.add(latheZ([[0.0071, 0], [0.0071, 0.006], [0.0082, 0.009], [0.0082, 0.0], [0.0071, 0]], D.portZ1 - 0.003, 0, seg(28)), barrelSteel);
+    P.add(tubeZ(0.0071, D.portZ1 - 0.003, D.slideFront + 0.0006, 0, 0, seg(32)), barrelSteel);
+    // crown: 11° target crown + dark rifled bore
+    P.add(latheZ([[0.0046, 0], [0.0062, 0], [0.0071, 0.0009], [0.0071, 0.0012], [0.0046, 0.0012]], D.slideFront + 0.0004, 0, seg(32)), barrelSteel);
+    P.add(discZ(0.0046, 0.0004, 0, 0, D.slideFront - 0.0004), dark);
+  }
+
+  // ------------------------------------------------------------------ frame (polymer)
+  const W = D.frameWidth;
+  {
+    // receiver body (dust cover, trigger housing, beavertail); the grip module is lofted separately below
+    const frameProf: P2[] = [
+      [-0.094, -0.0132], [0.0905, -0.0132], [0.094, -0.0168], [0.094, -0.0262],
+      [0.051, -0.0268], [0.0485, -0.0288], [-0.0125, -0.0288], [-0.0185, -0.0335], [-0.0185, -0.047],
+      [-0.0775, -0.054], [-0.0738, -0.0305], [-0.0845, -0.0228], [-0.0915, -0.0168], [-0.094, -0.0138],
+    ];
+    P.add(side(frameProf, W, 0.0022), frame);
+    // steel frame rails / slide seam: inset dark strip under the slide
+    P.add(side([[-0.0915, -0.0133], [0.0905, -0.0133], [0.0905, -0.0117], [-0.0915, -0.0117]], W - 0.0028, 0.0004), steelBlack);
+    for (const sx of [-1, 1]) {
+      P.add(box(0.0012, 0.0014, 0.028).translate(sx * (W / 2 - 0.0014 + 0.0003), -0.0125, -0.055), pins);  // front rails
+      P.add(box(0.0012, 0.0014, 0.02).translate(sx * (W / 2 - 0.0014 + 0.0003), -0.0125, 0.065), pins);    // rear rails
+    }
+    // trigger guard: narrow (11 mm) rounded loop with a squared front and a high undercut at the rear
+    const guardOuter: P2[] = [[0.051, -0.0262], [0.0498, -0.0300], [0.0485, -0.0360], [0.0472, -0.0532], [0.0415, -0.0588], [0.030, -0.0600], [-0.004, -0.0590], [-0.0130, -0.0520], [-0.0188, -0.0455], [-0.0188, -0.0262]];
+    const guardHole: P2[] = [[0.0405, -0.0315], [0.0405, -0.0495], [0.037, -0.0528], [-0.0035, -0.0528], [-0.0102, -0.0470], [-0.0130, -0.0315]];
+    P.add(side(guardOuter, 0.0112, 0.0032, [guardHole]), frame);
+    // grip module: lofted along the (raked) grip axis, plain polymer at the top, textured below the guard
+    const depths: number[] = [];
+    for (let d = 0.028; d <= 0.1125 + 1e-9; d += 0.0035) depths.push(d);
+    const upper = depths.filter((d) => d <= 0.0455 + 1e-9), lower = depths.filter((d) => d >= 0.0455 - 1e-9);
+    const mk = (ds: number[], extra: Station[] = []): Geometry => loft([...ds.map((d, i) => ({ z: d, prof: gripProfile(d), smooth: i > 0 })), ...extra], { capStart: false, capEnd: false }).rotateX(Math.PI / 2);
+    P.add(mk(upper), frame);
+    P.add(mk(lower, [{ z: 0.1145, prof: gripProfile(0.1145, 0.0008), smooth: true }, { z: 0.1165, prof: gripProfile(0.1165, 0.0016), smooth: false }, { z: 0.1172, prof: gripProfile(0.1165, 0.0014) }]), stipple);
+    // magwell cavity (inside faces) + bottom lip ring
+    const cav = prism(rrect(0.0236, 0.0356, 0.004, 4), 0, 0.105, { capEnd: false }).flipWinding();
+    P.add(cav.rotateX(Math.PI / 2 - Math.atan2(0.309, 0.951)).translate(0, -0.0135, 0.0365), dark);
+    // textured side panels (0.5 mm proud, rounded) on the grip module
+    for (const sx of [-1, 1]) {
+      const panel = extrude(rrect(0.0205, 0.052, 0.004, 4).pts, 0.0012, { bevel: 0.0005, bevelSegments: 2 });
+      P.add(panel.rotateY(sx * Math.PI / 2).transform(gripPanelTransform(sx)), stipple);
+    }
+    // accessory rail under the dust cover: 21 mm head with two cross slots
+    {
+      const railFull = new Prof().pt(0.0105, -0.0262).pt(0.0105, -0.0278).pt(0.0083, -0.0300).pt(-0.0083, -0.0300).pt(-0.0105, -0.0278).pt(-0.0105, -0.0262).done();
+      const railCut = new Prof().pt(0.0105, -0.0262).pt(0.0105, -0.0266).pt(0.0083, -0.0266).pt(-0.0083, -0.0266).pt(-0.0105, -0.0266).pt(-0.0105, -0.0262).done();
+      P.add(groovedLoft(railFull, railCut, -0.050, -0.092, [[-0.061, -0.0662], [-0.075, -0.0802]]), frame);
+    }
+    // frame pins: trigger pin, locking block pin, trigger housing pin
+    P.add(tubeX(0.0016, W + 0.0006, 0, -0.0215, -0.010, 14), pins);
+    P.add(tubeX(0.0016, W + 0.0006, 0, -0.0180, -0.034, 14), pins);
+    P.add(tubeX(0.0015, W + 0.0006, 0, -0.0215, 0.072, 14), pins);
+    // takedown lever: serrated tabs on both sides
+    for (const sx of [-1, 1]) {
+      P.add(roundedBox(0.0011, 0.0028, 0.0096, 0.0005).translate(sx * (W / 2 + 0.0004), -0.0165, -0.044), park);
+      for (let i = 0; i < 4; i++) P.add(box(0.0005, 0.0032, 0.0005).translate(sx * (W / 2 + 0.0009), -0.0165, -0.0405 - i * 0.0022), steelBlack);
+    }
+    // slide stop lever (left): flat spring-steel lever with a chequered thumb pad, pinned at the locking block
+    const ssProf: P2[] = [[0.004, -0.0138], [0.0262, -0.0138], [0.0300, -0.0150], [0.0320, -0.0172], [0.0282, -0.0188], [0.0210, -0.0176], [0.012, -0.0165], [0.004, -0.0162]];
+    P.add(side(ssProf, 0.0016, 0.0004).translate(-W / 2 - 0.0009, 0, 0), park);
+    P.add(side([[0.0180, -0.0132], [0.0260, -0.0132], [0.0276, -0.0148], [0.0176, -0.0160]], 0.0024, 0.0005).translate(-W / 2 - 0.0016, 0, 0), park);
+    P.add(screwHeadX(0.0017, -W / 2 - 0.0018, -0.0180, -0.034, -1, 'dome', 12), pins);
+    // magazine release: chequered button in a fence (left side) + the catch's other end (right side, flush)
+    P.add(roundedBox(0.0024, 0.0098, 0.0106, 0.0014).translate(-W / 2 - 0.0012 + 0.0006, -0.0395, 0.0135), frame);
+    P.add(roundedBox(0.0034, 0.0066, 0.0074, 0.0012).translate(-W / 2 - 0.0022, -0.0395, 0.0135), stipple);
+    P.add(roundedBox(0.0012, 0.0066, 0.0074, 0.0008).translate(W / 2 + 0.0004, -0.0395, 0.0135), park);
+    // roll marks: slide flats + frame serial plate (laser engraving)
+    if (o.engravings !== false) {
+      const left = engravingMaterial(renderer, ['C15 COMPACT  9x19'], 0.054, 0.0046, { px: 1024, tracking: 0.12 });
+      if (left) P.add(engravingQuadX(-hw - 0.00006, 0.0032, 0.0135, 0.054, 0.0046, -1), left, SLIDE);
+      const right = engravingMaterial(renderer, ['FONDAINE ARMS   MOD. C15'], 0.066, 0.0034, { px: 1024, tracking: 0.1 });
+      if (right) P.add(engravingQuadX(hw + 0.00006, -0.0062, 0.012, 0.066, 0.0034, 1), right, SLIDE);
+      const serialPlate = roundedBox(0.0008, 0.0062, 0.030, 0.0003).translate(W / 2 + 0.00015, -0.0205, -0.070);
+      P.add(serialPlate, pins);
+      const serial = engravingMaterial(renderer, ['FA 2209 0417'], 0.028, 0.0036, { px: 512, color: [0.12, 0.12, 0.125], metallic: 0.9, roughness: 0.5, tracking: 0.1 });
+      if (serial) P.add(engravingQuadX(W / 2 + 0.00062, -0.0205, -0.070, 0.028, 0.0036, 1), serial);
+      const leftFrame = engravingMaterial(renderer, ['C15'], 0.009, 0.0045, { px: 256, color: [0.07, 0.07, 0.072], metallic: 0, roughness: 0.7, tracking: 0.05, align: 'center' });
+      if (leftFrame) P.add(engravingQuadX(-W / 2 - 0.00006, -0.0225, -0.075, 0.009, 0.0045, -1), leftFrame);
+    }
+  }
+
+  // ------------------------------------------------------------------ trigger (flat-faced shoe with a centre safety blade)
+  {
+    const trigProf: P2[] = [[0.0098, -0.0300], [0.0150, -0.0300], [0.0146, -0.0350], [0.0126, -0.0420], [0.0094, -0.0478], [0.0060, -0.0500], [0.0046, -0.0490], [0.0072, -0.0440], [0.0094, -0.0378]];
+    P.add(side(trigProf, 0.0066, 0.001), park, { trigger: true });
+    P.add(side([[0.0152, -0.0340], [0.0166, -0.0345], [0.0146, -0.0470], [0.0120, -0.0478], [0.0126, -0.0420]], 0.0022, 0.0005), steelBlack, { trigger: true });
+  }
+
+  // ------------------------------------------------------------------ magazine (15-round, steel body + polymer base)
+  {
+    const tilt = Math.PI / 2 - Math.atan2(0.309, 0.951); // rotateX angle that maps +z (loft axis) onto the mag axis
+    const place = (g: Geometry) => g.rotateX(tilt).translate(0, -0.0195, 0.0385);
+    // body: rounded box, slightly tapered at the top, feed-lip notch at the top rear
+    const body = rrect(0.0222, 0.0338, 0.0038, 4);
+    const bodyTop = rrect(0.0214, 0.0330, 0.0036, 4);
+    P.add(place(loft([{ z: -0.001, prof: bodyTop }, { z: 0.006, prof: body, smooth: true }, { z: 0.1005, prof: body }], { capStart: false })), magBody, MAG);
+    // follower + top round (visible once the magazine is out)
+    P.add(place(prism(rrect(0.0196, 0.0300, 0.003, 3), -0.0035, 0.004)), follower, MAG);
+    const round = lathe([[0, 0], [0.00495, 0], [0.00495, 0.0185], [0.0047, 0.0195], [0.0040, 0.0235], [0.0026, 0.0272], [0.0010, 0.0290], [0, 0.0293]], seg(20));
+    P.add(round.rotateX(-Math.PI / 2).translate(0.0025, -0.0155, 0.0535), brass, { ...MAG, round: true });
+    // baseplate with a lip, retained by a floor plate insert
+    const base = rrect(0.0262, 0.0392, 0.0032, 3);
+    P.add(place(loft([{ z: 0.0995, prof: rrect(0.0232, 0.0348, 0.003, 3) }, { z: 0.1015, prof: base }, { z: 0.1075, prof: base }, { z: 0.1095, prof: rrect(0.0242, 0.0372, 0.0032, 3) }])), frame, MAG);
+    P.add(place(discZ(0.0028, 0.0006, 0, 0.004, 0.1097, 12)), pins, MAG);
+    // witness holes down the back of the body
+    for (let i = 0; i < 6; i++) P.add(place(tubeY(0.0011, 0.0006, 0, 0.0169, 0.018 + i * 0.0145, 10)), dark, MAG);
+  }
+
+  const parts = P.finish();
+  const casingMesh = new Mesh(renderer.dev, casingGeometry(0.019, 0.0099, lathe, { straight: true }));
+
+  const model: FirearmModel = {
+    parts,
+    muzzle: vec3.create(0, 0, D.slideFront - 0.001),
+    ejectionPort: vec3.create(0.0105, 0.0125, (D.portZ0 + D.portZ1) / 2),
+    rearSight: vec3.create(0, D.sightLine, D.rearSightZ),
+    frontSight: vec3.create(0, D.sightLine, D.frontSightZ),
+    casingMesh,
+    casingMaterial: brass,
+    // grip rake ≈ 18°: the magazine leaves the magwell down and back
+    magAxis: vec3.normalize(vec3.create(), vec3.create(0, -0.951, 0.309)),
+    magBox: { center: vec3.create(0, -0.07, 0.051), half: vec3.create(0.0131, 0.053, 0.019) },
+    triggerTravelM: 0.0045,
+    selector: { pivot: [-D.slideWidth / 2 - 0.0008, 0.004, 0.074], axis: [1, 0, 0], angles: { safe: 0, semi: -0.9, auto: -1.8 } },
+    // racking: support hand grabs the rear serrations over the top of the slide and lets go (slingshot)
+    charge: { grip: vec3.create(0, D.slideTop + 0.004, 0.064), travelM: D.slideTravel, release: 'slingshot', pullDir: vec3.create(0, 0, 1) },
+  };
+  const stats = { triangles: P.triangles, buildMs: performance.now() - t0 };
+  console.info(`[oaxis] C15 Compact: ${stats.triangles.toLocaleString()} tris in ${stats.buildMs.toFixed(0)} ms`);
+  return { model, spec: compactPistolSpec(D.sightLine), grips: COMPACT_PISTOL_GRIPS, stats };
+}
+
+/** Places a side panel (built facing ±x in the yz plane) onto the raked grip module. */
+function gripPanelTransform(sx: number): Float32Array {
+  // panel centre: depth 0.079 below the frame top, mid grip; rake follows the grip axis (18°)
+  const d = 0.079, t = (d - 0.028) / (0.1165 - 0.028);
+  const zF = 0.0185 + 0.0229 * t, zB = 0.0725 + 0.0161 * t;
+  const hw = 0.0128 + 0.0021 * Math.sin(Math.PI * Math.min(1, Math.max(0, (d - 0.03) / 0.09))) ** 0.7;
+  const rake = Math.atan2(0.0229 + 0.0161, 2 * (0.1165 - 0.028));
+  const c = Math.cos(rake), s = Math.sin(rake);
+  // column-major: rotate about x by `rake` (so the panel's y axis follows the grip), translate to the side
+  return new Float32Array([1, 0, 0, 0, 0, c, -s, 0, 0, s, c, 0, sx * (hw - 0.0001), -d, (zF + zB) / 2, 1]);
+}
+
+/** Two-handed thumbs-forward grip on the C15 (weapon space). Tune live in the viewer. */
+export const COMPACT_PISTOL_GRIPS: WeaponGrips = {
+  right: {
+    position: [0.0285, -0.0326, 0.1253], fingerDir: [0, -0.309, -0.951], dorsal: [1, 0, 0],
+    fingers: [{ curl: [0.5, 0.7, 0.3], spread: 0.1 }, { curl: [1.25, 1.35, 0.7] }, { curl: [1.3, 1.35, 0.7] }, { curl: [1.35, 1.3, 0.7] }],
+    thumb: { dir: [-0.55, -0.55, -0.62], bend: [0.15, 0.1] },
+  },
+  indexPressed: { curl: [0.55, 0.95, 0.45], spread: 0.08 },
+  left: {
+    position: [-0.034, -0.0325, 0.0823], fingerDir: [0, -0.5, -0.866], dorsal: [-1, 0, 0],
+    fingers: [{ curl: [1.15, 1.2, 0.6] }, { curl: [1.2, 1.2, 0.6] }, { curl: [1.2, 1.2, 0.6] }, { curl: [1.2, 1.15, 0.6] }],
+    thumb: { dir: [-0.5, -0.1, -0.86], bend: [0.05, 0.05] },
+  },
+  leftOnMagazine: {
+    position: [0.0, -0.15, 0.13], fingerDir: [0, 0.25, -0.97], dorsal: [0, -1, 0],
+    fingers: [{ curl: [0.9, 0.9, 0.4] }, { curl: [0.95, 0.9, 0.4] }, { curl: [0.95, 0.9, 0.4] }, { curl: [0.95, 0.9, 0.4] }],
+    thumb: { dir: [-0.7, 0.2, -0.6], bend: [0.2, 0.1] },
+  },
+};
+
+/** Physical + handling parameters for the C15 Compact (all tunable at runtime from F1 → Weapon). */
+export function compactPistolSpec(sightHeightM: number = C15.sightLine): FirearmSpec {
+  return {
+    name: 'C15 Compact 9mm',
+    caliber: CALIBERS['9x19 124gr'],
+    barrelLengthM: 0.102,
+    massKg: 0.84,                 // loaded (15 × 124 gr + magazine)
+    rpm: 1100,                    // cyclic rate in auto; semi is limited by your trigger finger
+    fireModes: ['safe', 'semi', 'auto'],
+    magazineCapacity: 15,
+    sightHeightM,
+    zeroM: 23,                    // 25 yd point-of-aim / point-of-impact
+    accuracyMoa: 3,
+    recoil: {
+      // a pistol pivots at the wrists: high bore over the grip, low inertia, eyes don't ride the gun
+      boreAboveShoulderM: 0.045,
+      inertia: 0.075,
+      shoulderMassKg: 3.5,
+      holdOmega: 15,
+      holdDamping: 0.55,
+      horizontalRatio: 0.3,
+      viewCouplingHip: 0.04,
+      viewCouplingAds: 0.1,
+      residualRise: 0.06,
+    },
+    reload: { magOut: 0.45, magIn: 0.85, boltRelease: 0.35 },
+    audio: GUNSHOTS.pistol9mm,
+    flash: { kelvin: 1850, luminance: 4.5e5, sizeM: 0.07, lightCandela: 12000, sidePorts: false, smoke: 0.5 },
+    ejection: { speed: 3.2, up: 2.4, back: 1.0, spinRad: 35 },
+    hipOffset: [0.05, -0.118, -0.38],    // high ready: the slide sits just under the eye line, grip and hands in view
+    eyeRelief: 0.56,              // arms extended, two-handed
+    adsTime: 0.22,
+    action: { travelM: C15.slideTravel, backMs: 5, returnMs: 8, lockOpenOnEmpty: true, lockFraction: 0.93 },
+    drawTime: 0.45,
+  };
+}

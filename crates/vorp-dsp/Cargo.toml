@@ -1,0 +1,11 @@
+[package]
+name = "vorp-dsp"
+version = "0.1.0"
+edition = "2021"
+description = "vorp — physically-based real-time audio DSP for the fondaine engine (runs inside an AudioWorklet via WebAssembly)"
+license = "UNLICENSED"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
