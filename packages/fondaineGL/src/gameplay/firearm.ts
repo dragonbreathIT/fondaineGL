@@ -289,7 +289,7 @@ export class Firearm extends Behaviour {
     // pistol: brought in to the chest, muzzle up ~55°, canted out so the magwell faces the eyes and the fresh
     // magazine rises into view; rifle: pulled in and rolled ~40° to the left so the magwell shows past the receiver
     this.spec.reloadPose ??= this.spec.action && this.spec.eyeRelief > 0.3
-      ? { lift: 0.13, back: 0.08, pitch: 0.8, yaw: 0.2, roll: 0.45, chargeRoll: 0.3 }
+      ? { lift: 0.16, back: 0.08, pitch: 0.8, yaw: 0.2, roll: 0.45, chargeRoll: 0.3 }
       : { lift: 0.06, back: 0.06, pitch: 0.3, yaw: 0.38, roll: 0.7, chargeRoll: 0.15 };
     const rp = this.spec.reloadPose as unknown as Record<string, number>;
     ta.number(ga, rp, 'lift', { label: 'Reload pose: lift', min: -0.1, max: 0.2, step: 0.001, unit: 'm' })
