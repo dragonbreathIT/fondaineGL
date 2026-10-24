@@ -648,14 +648,13 @@ export class Firearm extends Behaviour {
       this.rackPull = travel * (0.08 + 0.92 * k);
       if (this.rackSoundDone < 1) {
         this.rackSoundDone = 1;
-        // slide rasp along the rails + the hand slapping onto the serrations
-        this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 68, attackMs: 4, decayMs: 110, hpHz: 700, lpHz: 7500, thumpDb: -34 }, port));
-        this.audio.modal(receiverModes(1.25), [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }], port, 0.6);
+        // slide rasp along the rails (charging handle on a rifle)
+        this.audio.mech(this.model.charge ? 'chargingHandle' : 'slideRack', port);
       }
       if (k > 0.97 && this.rackSoundDone < 2) {
         this.rackSoundDone = 2;
         // slide / carrier hits its rear stop; a chambered round is extracted and flung out
-        this.audio.modal(receiverModes(1.1), [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }], port, 0.9);
+        this.audio.mech('slideStop', port);
         if (this.chambered) { this.ejectCasing(); this.chambered = false; }
       }
       return;
@@ -667,8 +666,7 @@ export class Firearm extends Behaviour {
       this.releaseT = 0;
       this.anim.lockedOpen = false;
       this.rackRelease = true;
-      this.audio.modal(receiverModes(1), [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }], port, 1.1); // slams home
-      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 62, attackMs: 2, decayMs: 70, hpHz: 900, lpHz: 9000, thumpDb: -30 }, port, { delayMs: 8 }));
+      this.audio.mech('slideHome', port);
       if (this.rounds > 0 && !this.chambered) { this.rounds--; this.chambered = true; }
     }
   }
@@ -702,11 +700,9 @@ export class Firearm extends Behaviour {
     this.phaseT = Math.min(1, Math.max(0, (this.reloadT - cur.start) / Math.max(1e-6, cur.end - cur.start)));
     // 1. thumb presses the magazine release: button click, then the magazine falls free
     if (cross(this.releaseAt) && this.model.magBox) {
-      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 70, attackMs: 0.3, decayMs: 6, hpHz: 1500, lpHz: 9000, thumpDb: -30 }, port));
-      this.audio.modal(receiverModes(1.4), [{ timeMs: 6, amp: 0.25, contactMs: 0.06, noiseDb: -8 }], port, 0.6);
+      this.audio.mech('magRelease', port);
       this.dropMagazine();
-      // the empty magazine slides out of the well: short friction hiss
-      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 64, attackMs: 8, decayMs: 120, hpHz: 600, lpHz: 6000, thumpDb: -40 }, port, { delayMs: 40 }));
+      this.audio.mech('magOut', port, { delayMs: 40 }); // the empty magazine slides out of the well
     }
     const magInLen = s.magIn + (this.fumbling ? this.magAnim.fumbleExtra : 0);
     const seatT = s.magOut + magInLen * this.magAnim.seatFraction;
@@ -717,8 +713,7 @@ export class Firearm extends Behaviour {
     }
     // 3. magazine seats: two-stage click; the follower now feeds the action
     if (cross(seatT)) {
-      this.audio.modal(receiverModes(1.15), [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }], port, 0.9);
-      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 66, attackMs: 1, decayMs: 25, hpHz: 900, lpHz: 7000, thumpDb: -20 }, port, { delayMs: 10 }));
+      this.audio.mech('magSeat', port);
       this.rounds = this.spec.magazineCapacity;
     }
     if (cur.phase === 'release') {
@@ -727,8 +722,8 @@ export class Firearm extends Behaviour {
         this.anim.lockedOpen = false;
         this.releaseFrom = this.anim.slide;
         this.releaseT = 0;
-        this.audio.modal(receiverModes(1.35), [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }], port, 0.6); // catch
-        this.audio.modal(receiverModes(1), [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }], port, 1.1, { delayMs: 25 }); // slams home
+        this.audio.mech('boltCatch', port);
+        this.audio.mech('slideHome', port, { delayMs: 25 });
         if (this.rounds > 0) { this.rounds--; this.chambered = true; }
       }
     } else if (cur.phase === 'charge') {
@@ -743,7 +738,7 @@ export class Firearm extends Behaviour {
       this.rackPull = -1;
       // a quiet breath out as the gun comes back up
       const head = this.controller.eyePos;
-      this.audio.whenReady(() => this.audio.vorp?.noise({ levelSpl: 50, attackMs: 90, decayMs: 420, hpHz: 250, lpHz: 2600, thumpDb: -40 }, [head[0], head[1] - 0.1, head[2]], { delayMs: 120 }));
+      this.audio.breath([head[0], head[1] - 0.1, head[2]], { delayMs: 120 });
     }
     // the eyes glance down at the magwell while the hands work, back up for the rack / release
     const dipTarget = this.reloadT >= 0 && (cur.phase === 'magOut' || cur.phase === 'magIn') ? this.magAnim.cameraDipDeg * DEG2RAD * (cur.phase === 'magOut' ? Math.min(1, this.phaseT * 2.5) : 1) : 0;
@@ -758,12 +753,7 @@ export class Firearm extends Behaviour {
     this.mode = m[(m.indexOf(this.mode) + 1) % m.length];
     this.switchT = 0;
     const at = this.model.selector ? vec3.transformMat4(vec3.create(), this.model.selector.pivot, this.rootWorld) : this.local(this.model.ejectionPort);
-    // detent click: a dry, very short double transient (lever leaves one notch, drops into the next), no ring
-    this.audio.whenReady(() => {
-      const v = this.audio.vorp; if (!v) return;
-      v.noise({ levelSpl: 74, attackMs: 0.2, decayMs: 4, hpHz: 1800, lpHz: 9000, thumpDb: -40 }, at);
-      v.noise({ levelSpl: 80, attackMs: 0.2, decayMs: 7, hpHz: 1200, lpHz: 8000, thumpDb: -22 }, at, { delayMs: 22 });
-    });
+    this.audio.mech('selector', at); // dry detent click
     this.input.rumble(0.15, 0.05, 25);
   }
 
@@ -773,7 +763,7 @@ export class Firearm extends Behaviour {
   }
 
   private dryFire() {
-    this.audio.modal(receiverModes(1.5), [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }], this.local(this.model.ejectionPort), 0.5);
+    this.audio.mech('dryFire', this.local(this.model.ejectionPort));
   }
 
   private fire() {
@@ -963,8 +953,7 @@ export class Firearm extends Behaviour {
       if (speed < 0.3 || this.engine.time - dm.lastSound < 0.06) return;
       dm.lastSound = this.engine.time;
       const lvl = Math.min(1.5, speed / 2.5);
-      if (surfaceOf(otherMaterial).hard) this.audio.modal(receiverModes(0.75), [{ timeMs: 0, amp: lvl, contactMs: 0.25, noiseDb: -4 }], point, 0.12 + 0.2 * lvl);
-      else this.audio.whenReady(() => this.audio.vorp?.noise({ ...IMPACTS.dirt, levelSpl: 58 + 12 * lvl, decayMs: 70, thumpDb: -3, grainsPerS: 120 }, point));
+      if (lvl > 0.35) this.audio.mech(surfaceOf(otherMaterial).hard ? 'magDropConcrete' : 'magDropDirt', point);
       return;
     }
     const cs = this.casingByBody.get(bodyId);

@@ -22,11 +22,13 @@ export interface AudioSettings {
   occlusionDb: number;
   occlusionLowpassHz: number;
   cracks: boolean;
+  /** Let the engine's Wind system drive the ambience wind bed (level, gustiness, gust rate). */
+  windAmbience: boolean;
 }
 
 export class AudioSystem {
   vorp: Vorp | null = null;
-  readonly settings: AudioSettings = { reflections: true, probeRays: 14, probeDistance: 45, occlusion: true, occlusionDb: -14, occlusionLowpassHz: 1100, cracks: true };
+  readonly settings: AudioSettings = { reflections: true, probeRays: 14, probeDistance: 45, occlusion: true, occlusionDb: -14, occlusionLowpassHz: 1100, cracks: true, windAmbience: true };
   /** Surface acoustics by physics material id. */
   readonly surfaces = new Map<number, SurfaceAcoustics>();
   readonly listener = { position: vec3.create(), forward: vec3.create(0, 0, -1), up: vec3.create(0, 1, 0) };
@@ -62,7 +64,20 @@ export class AudioSystem {
   /** Run `fn` now if audio is up, otherwise once it starts. */
   whenReady(fn: () => void) { if (this.vorp) fn(); else this.pending.push(fn); }
 
-  setZone(z: ZonePreset) { this.zone = z; this.vorp?.setZone(z); }
+  setZone(z: ZonePreset) { this.zone = z; this.vorp?.setZone(z); if (this.lastWind) this.setWind(...this.lastWind); }
+
+  private lastWind: [number, number, number] | null = null;
+  /**
+   * Drive the ambience wind bed from the engine's Wind system (speed m/s, gustiness 0..1, gust rate Hz).
+   * Called by the Engine whenever `engine.wind` settings change; a zone's own ambience is overridden.
+   */
+  setWind(speed: number, gustiness: number, gustRate: number) {
+    this.lastWind = [speed, gustiness, gustRate];
+    if (!this.settings.windAmbience) return;
+    const spl = speed < 0.05 ? 0 : 28 + 26 * Math.log10(1 + speed);
+    const toneHz = 450 + 60 * speed;
+    this.whenReady(() => this.vorp?.setAmbience({ windSpl: spl, windGust: gustiness, windGustRate: gustRate, windToneHz: toneHz }));
+  }
 
   surface(material: number): SurfaceAcoustics { return this.surfaces.get(material) ?? { reflection: 0.8, lowpassHz: 6000 }; }
 
@@ -190,6 +205,23 @@ export class AudioSystem {
     const h = v.modal(modes, hits, pos, level, o);
     this.finish(h, pos, null, 0);
     return h;
+  }
+
+  /** Mechanical weapon sound from the vorp MECH presets (magazine release, seat, slide rack, bolt catch, …), with reflections + occlusion. */
+  mech(name: Parameters<Vorp['mech']>[0], pos: ArrayLike<number>, o: SpawnOptions = {}) {
+    const v = this.vorp;
+    if (!v) return null;
+    const r = v.mech(name, pos, o);
+    this.finish(r.noise, pos, null, 0);
+    if (r.ring) this.finish(r.ring, pos, null, 0);
+    return r;
+  }
+
+  /** A quiet human exhale at `pos` (the shooter's mouth). */
+  breath(pos: ArrayLike<number>, o: SpawnOptions = {}) {
+    const v = this.vorp;
+    if (!v) return null;
+    return v.breath(pos, o);
   }
 
   footstep(values: Record<string, number>, pos: ArrayLike<number>) {
