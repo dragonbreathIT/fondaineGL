@@ -21,6 +21,7 @@ export function registerRenderTuning(tuning: Tuning, r: Renderer) {
     .number('Sky', S.ibl, 'intensity', { label: 'IBL intensity', min: 0, max: 3, step: 0.01, help: 'Keep at 1 for physical correctness.' })
     .number('Sky', S.ibl, 'specularOcclusion', { label: 'Specular occlusion', min: 0, max: 1, step: 0.01 })
     .number('Sky', S.ibl, 'occludedAmbient', { label: 'Bounce fill (occluded sky)', min: 0, max: 1, step: 0.01, help: 'Fraction of sky ambient still arriving from occluded sky directions. ≈0.1–0.2.' })
+    .number('Sky', S.ibl, 'viewmodelFill', { label: 'Viewmodel ambient fill', min: 0.5, max: 3, step: 0.05, help: 'Ambient multiplier on the first-person weapon and hands only (1 = physical). Dark gear in roof shadow needs ≈1.5–2 to read like it does to an adapted eye.' })
     .number('Sky', S.ibl, 'groundBounce', { label: 'Sun ground bounce', min: 0, max: 2, step: 0.01, help: 'One-bounce sunlight (sun lux × ground albedo / π) received where the sky is blocked — lights pavilion/porch interiors. No real-time GI: ≈0.4–0.8 on sunny days.' });
 
   t.bool('Global illumination', S.gi, 'enabled', { label: 'Baked GI probes', help: 'Path-traced at load: sky occlusion + multi-bounce sun/sky light. Replaces the analytic fill inside the probe volume.' })

@@ -263,7 +263,7 @@ function applyRig(rig: CameraRig) {
     cam.iso = 100;
     Object.assign(R.lens, { distortion: 0, distortion2: 0, fillZoom: 1, chromaticAberration: 0.12, naturalVignette: 0.45, vignette: 0.08, vignetteRoundness: 0.6, sharpen: 0.25 });
     Object.assign(R.sensor, { enabled: true, readNoise: 0.0015, shotNoise: 0.0012, gain: 1 });
-    Object.assign(R.exposure, { speedUp: 2.2, speedDown: 1.4, compensation: 0.35, centerWeight: 0.6, lowPercent: 0.45 });
+    Object.assign(R.exposure, { speedUp: 2.2, speedDown: 1.4, compensation: 0.6, centerWeight: 0.7, lowPercent: 0.45 });
     Object.assign(R.motionBlur, { shutterAngle: 180 });
     Object.assign(R.dof, { enabled: true, apertureMm: 3.2 }); // daylight pupil
     Object.assign(R.grade, { tonemapper: 'agx', contrast: 1.04, saturation: 1.02, temperature: 0, tint: 0 });

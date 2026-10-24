@@ -89,7 +89,7 @@ export class FirstPersonArms {
     this.options = {
       skin: o.skin ?? 'bare',
       skinColor: o.skinColor ?? [0.56, 0.36, 0.27],
-      gloveColor: o.gloveColor ?? [0.035, 0.033, 0.03],
+      gloveColor: o.gloveColor ?? [0.085, 0.08, 0.072],   // worn black nylon reads ~8% in shade, not 3%
       palmColor: o.palmColor ?? [0.06, 0.05, 0.04],
       sleeveColor: o.sleeveColor ?? [0.075, 0.08, 0.065],
       shoulderRight: o.shoulderRight ?? [0.2, -0.31, 0.1],

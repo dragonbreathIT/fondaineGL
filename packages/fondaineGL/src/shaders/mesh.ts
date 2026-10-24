@@ -298,6 +298,8 @@ fn shade(si: ShadeIn) -> vec3f {
   var ambE = shIrradiance(s.N) * diffOcc + bounce;
   let probe = sampleProbes(si.worldPos, si.Ng, s.N, s.V);
   ambE = mix(ambE, probe.rgb, probe.a);
+  // first-person gear: a fill on the ambient term only (direct light and shadows stay physical)
+  if (isViewmodel()) { ambE *= frame.extra.z; }
   let diffuse = ambE * s.albedo * multiBounceAO(ao, s.albedo);
   let lod = s.perceptualRoughness * frame.envParams.x;
   let pre = textureSampleLevel(envSpecular, linearClamp, R, lod).rgb;

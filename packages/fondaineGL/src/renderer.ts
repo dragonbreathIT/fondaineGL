@@ -46,7 +46,7 @@ export interface RenderSettings {
   sensor: { enabled: boolean; readNoise: number; shotNoise: number; isoCoupled: boolean; gain: number };
   grade: { tonemapper: Tonemapper; contrast: number; saturation: number; temperature: number; tint: number; lift: number; gamma: number; gain: number; exposureBias: number; dither: number };
   fog: { density: number; heightFalloff: number; baseHeight: number; startDistance: number; inscatter: number; mieG: number };
-  ibl: { intensity: number; specularOcclusion: number; occludedAmbient: number; groundBounce: number };
+  ibl: { intensity: number; specularOcclusion: number; occludedAmbient: number; groundBounce: number; /** Ambient multiplier on first-person (viewmodel) surfaces: the eye adapts to what it holds, and dark gear in roof shadow would otherwise read black. 1 = physical. */ viewmodelFill: number };
   /** Baked GI probe volume. */
   gi: { enabled: boolean; intensity: number };
   /** Procedural cloud deck (visible clouds + matching drifting cloud shadows). */
@@ -73,7 +73,7 @@ export function defaultRenderSettings(): RenderSettings {
     sensor: { enabled: true, readNoise: 0.0025, shotNoise: 0.0018, isoCoupled: true, gain: 1 },
     grade: { tonemapper: 'agx', contrast: 1.04, saturation: 1.02, temperature: 0, tint: 0, lift: 0, gamma: 1, gain: 1, exposureBias: 0, dither: 1 },
     fog: { density: 0.00035, heightFalloff: 0.045, baseHeight: 0, startDistance: 15, inscatter: 1, mieG: 0.72 },
-    ibl: { intensity: 1, specularOcclusion: 1, occludedAmbient: 0.15, groundBounce: 0.6 },
+    ibl: { intensity: 1, specularOcclusion: 1, occludedAmbient: 0.15, groundBounce: 0.6, viewmodelFill: 1.7 },
     gi: { enabled: true, intensity: 1 },
     wind: { direction: [0.94, 0.35], speed: 1.7, bend: 0.045, turbulence: 0.25 },
     clouds: { enabled: true, coverage: 0.42, density: 1.6, altitude: 1800, scale: 2600, windSpeed: 9, windDirDeg: 25, shadowStrength: 0.88 },
@@ -596,7 +596,7 @@ export class Renderer {
     F.vec4(1184, this.ibl.mips - 1, 1, this.sky.settings.groundAlbedo, S.debugView);
     F.vec4(1200, S.viewmodelDepthSqueeze, 0, 0, 0);
     F.vec4(1232, sh.constantBias, sh.slopeBias, Math.min(16, sh.blockerSamples), Math.min(32, sh.pcfSamples));
-    F.vec4(1248, S.ibl.occludedAmbient, S.ibl.groundBounce, 0, 0);
+    F.vec4(1248, S.ibl.occludedAmbient, S.ibl.groundBounce, S.ibl.viewmodelFill, 0);
     F.vec4(1264, S.wind.direction[0] * S.wind.speed, S.wind.direction[1] * S.wind.speed, S.wind.bend, S.wind.turbulence);
     const C = S.clouds;
     this.cloudDrift[0] += Math.cos(C.windDirDeg * Math.PI / 180) * C.windSpeed * dt;
