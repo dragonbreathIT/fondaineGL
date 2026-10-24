@@ -350,6 +350,7 @@ if (params.get('demo') === '1' || offscreen) {
   const rackAt = params.has('rackAt') ? Number(params.get('rackAt')) : -1;
   const scrub = Number(params.get('scrub') ?? 0);
   if (params.get('empty') === '1') for (const w of weapons) { w.rounds = 0; w.chambered = false; if (w.spec.action?.lockOpenOnEmpty) w.anim.lockedOpen = true; }
+  if (params.has('fumble')) for (const w of weapons) w.magAnim.fumbleChance = Number(params.get('fumble')); // 1 forces the botched insertion, 0 never
   engine.onUpdate.push(() => {
     const f = engine.frame;
     if (f === reloadAt) { gun.reload(); gun.scrubReload(scrub); }
