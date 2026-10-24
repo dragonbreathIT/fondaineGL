@@ -44,8 +44,9 @@ if (software) args.push('--use-webgpu-adapter=swiftshader');
 let browser;
 const tries = [
   () => pw.chromium.launch({ headless: true, args, ...(existsSync('/opt/pw-browsers/chromium') ? { executablePath: '/opt/pw-browsers/chromium' } : {}) }),
-  () => pw.chromium.launch({ channel: 'chrome', headless: true, args }),
-  () => pw.chromium.launch({ channel: 'msedge', headless: true, args }),
+  // installed Chrome / Edge: a visible window on Windows/macOS so the real GPU is used (headless may fall back to software)
+  () => pw.chromium.launch({ channel: 'chrome', headless: process.platform === 'linux', args }),
+  () => pw.chromium.launch({ channel: 'msedge', headless: process.platform === 'linux', args }),
 ];
 let lastErr;
 for (const t of tries) { try { browser = await t(); break; } catch (e) { lastErr = e; } }
