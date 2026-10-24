@@ -80,7 +80,11 @@ URL options: `?rig=bodycam`, `?weapon=pistol`, `?sun=12&az=250` (low sun, golden
 
 ### Hands and grips
 
-The first-person hands are a procedurally sculpted, skinned hand + forearm mesh per side (`packages/oaxis/src/viewmodel/hand-mesh.ts`: SDF → surface nets → linear-blend skinning over 18 joints; bare skin or glove). Grip poses are authored per weapon (`COMPACT_PISTOL_GRIPS`, `CARBINE_GRIPS`) and then **fitted to the weapon geometry at load** (`fitWeaponGrips` in `viewmodel/grip-fit.ts`): each phalanx is curled until it touches the weapon's triangles, the palm is pushed out if it is inside the frame, and the trigger finger keeps its authored pose. Works for any `FirearmModel`, including glTF guns. `?fit=0` shows the raw authored poses (range and viewer).
+The first-person hands are a procedurally sculpted, skinned hand + forearm mesh per side (`packages/oaxis/src/viewmodel/hand-mesh.ts`: SDF → surface nets → linear-blend skinning over 18 joints). `FirstPersonArms` renders them as **bare skin** or a **tactical glove** (`skin: 'glove'`: knit back, leather cuff with closure strap and pull tab, knuckle panel; the range uses gloves). Grip poses are authored per weapon (`COMPACT_PISTOL_GRIPS`, `CARBINE_GRIPS`) and then **fitted to the weapon geometry at load** (`fitWeaponGrips` in `viewmodel/grip-fit.ts`): the hand is moved by the smallest offset that gets the palm and straight proximal phalanges out of the metal, then each phalanx closes (proximal → distal) until it touches with a 0.8 mm gap; the thumb turns away if it stabs the frame; the trigger finger's contact is the frame above the guard and its pressed pose is fitted to the trigger shoe. Works for any `FirearmModel`, including glTF guns. `?fit=0` shows the raw authored poses (range and viewer; the viewer exposes `__fit`, `__clear(model, hand, fitted)` and `__sd(model, point)` for debugging).
+
+### Reloads and racking
+
+A reload is a phase plan (`Firearm.reloadPhase` / `phaseT`): **magOut** (the firing-hand thumb reaches and presses the magazine release, the empty magazine drops as a rigid body and clatters, the support hand drops to the chest pouch, the eyes dip towards the magwell), **magIn** (the fresh magazine rides up in the support hand; with `fumbleChance` it catches the magwell lip, bounces and seats on the second push; two-stage seat click), then either **charge** (overhand rack of the pistol slide / charging handle: hand travels, pulls, lets go, the recoil spring slams the action home), **release** (the AR's bolt catch is slapped when the bolt was locked back) or **settle** (tactical reload), and a quiet exhale. Everything is tunable per weapon under *Viewmodel → Reload: …*. Weapons describe racking through `FirearmModel.charge` (`grip`, `travelM`, `release: 'slingshot' | 'boltRelease'`, `pullDir`) and parts flagged `charge` (non-reciprocating charging handle) / `bolt` / `magazine` / `round` (the top cartridge, hidden when empty). Sprinting blends the carry over ~0.3 s; nothing snaps.
 
 ### Range URL parameters
 
@@ -316,6 +320,7 @@ docs/vorp-reference/  offline renders of reference scenarios (WAV)
 
 ## Honest limitations (M1)
 
+- **Viewmodel lighting is a compromise.** Under the roof the first-person gun and gloves receive only ambient light; a physical render makes them near-black against the sunlit range. *Sky → Viewmodel ambient fill* (default 1.7×, ambient term only) stands in for the eye's local adaptation until a proper local tone mapper exists.
 - **No hardware ray tracing on the web.**
   - GI is a path-traced probe bake that runs at load on a **web-worker pool** (cores − 1) and **re-bakes automatically** ~0.6 s after the sun or sky changes. It's not per-frame: dynamic objects receive GI but don't contribute. Outside the probe volume the analytic sky fill is used.
   - The sky-visibility bake still runs on the main thread, so loading-screen text pauses briefly during it (the sweep line keeps going).
