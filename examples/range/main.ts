@@ -33,19 +33,21 @@ const quick = params.get('offscreen') === '1' || params.get('demo') === '1' || p
 if (quick) loader.style.display = 'none';
 const frame = () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 let ldBusy: Promise<void> = Promise.resolve();
-/** Cross-fade the loading status line (fade out, swap, fade in), then yield so it paints. */
+/**
+ * Loading status. The overlay gets the full message (with progress %); the line under the f shows the stage name
+ * only and cross-fades exactly when the stage changes (progress ticks never touch it), then yields so it paints.
+ */
 let ldBase = '';
 async function setStatus(msg: string) {
   status.textContent = msg;
   if (quick) return;
-  // progress ticks of the same stage update in place; a new stage cross-fades
-  const base = msg.replace(/\d+%$/, '');
-  if (base === ldBase) { ldText.textContent = msg; return; }
+  const base = msg.replace(/\s*[·:]?\s*\d+%$/, '').trim();
+  if (base === ldBase) return;
   ldBase = base;
   ldBusy = ldBusy.then(async () => {
     ldText.classList.add('out');
-    await new Promise((r) => setTimeout(r, 170));
-    ldText.textContent = msg;
+    await new Promise((r) => setTimeout(r, 150));
+    ldText.textContent = base;
     ldText.classList.remove('out');
   });
   await frame();
@@ -93,8 +95,9 @@ if (params.get('gi') !== '0') {
 registerOAxisTuning(engine.tuning);
 const player = engine.createEntity('player', range.spawn);
 const ctrl = engine.addScript(player, new FPSController());
-await setStatus('Machining weapons');
+await setStatus('Machining the carbine');
 const carbine = buildCarbine(engine.renderer);
+await setStatus('Machining the C15 Compact');
 const pistol = buildCompactPistol(engine.renderer);
 const weapons = [
   engine.addScript(player, new Firearm(carbine.spec, carbine.model, ctrl)),
@@ -119,7 +122,7 @@ engine.onUpdate.push(() => {
   if (engine.input.actionPressed('nextWeapon')) equip((current + 1) % weapons.length);
 });
 // ------------------------------------------------------------------------ first-person arms (oAxis)
-await setStatus('Fitting gloves');
+await setStatus('Sculpting hands');
 let arms: FirstPersonArms | SkinnedArms | null = null;
 if (params.get('arms') !== '0') {
   // a real rigged character (assets slot "arms", e.g. from Mixamo) beats the procedural gloves
@@ -146,6 +149,7 @@ const fitGrips = (g: WeaponGrips | undefined, w: Firearm): Grips | undefined => 
   console.info(`[oaxis] grip fit ${w.spec.name}: ${Object.entries(r.reports).map(([k, v]) => `${k} ${v.changed} digits${v.palmPush ? ` palm +${(v.palmPush * 1000).toFixed(1)}mm` : ''}`).join(', ')} in ${(performance.now() - t0).toFixed(0)} ms`);
   return r.grips;
 };
+await setStatus('Fitting the grips to the weapons');
 const gripsFor = new Map<Firearm, Grips | undefined>([[weapons[0], fitGrips(carbine.grips, weapons[0])], [weapons[1], fitGrips(pistol.grips, weapons[1])]]);
 const fittedSupport = new Map<string, HandPose>();
 const fitOnce = (key: string, w: Firearm, make: () => HandPose): HandPose => {
@@ -302,6 +306,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 // warm up: compile every pipeline and fill the TAA history before revealing the world
 await setStatus('Compiling shaders');
+await frame();
 engine.step(1 / 60);
 await engine.renderer.dev.device.queue.onSubmittedWorkDone();
 await setStatus('Ready');
