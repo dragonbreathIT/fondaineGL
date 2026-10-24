@@ -106,8 +106,9 @@ fn linearDepth(d: f32) -> f32 { return frame.camPos.w / max(d, 1e-7); }
   var rgb = vec3f(0.0);
   var a = tex.a * i.color.a * soft;
   if (kind == 1u || kind == 2u) {
-    // emissive (flash core / hot sparks): additive via premultiplied alpha = 0
-    rgb = i.color.rgb * tex.rgb * i.params.z * i.color.a * soft;
+    // emissive (flash core / hot sparks): additive via premultiplied alpha = 0. The sprite's alpha is the
+    // shape (petal star / streak); without it the whole quad glows and a flash reads as a square.
+    rgb = i.color.rgb * tex.rgb * tex.a * i.params.z * i.color.a * soft;
     a = 0.0;
   } else {
     // lit participating medium: sun with HG forward scattering + sky ambient

@@ -302,7 +302,7 @@ export function buildCompactPistol(renderer: Renderer, o: CompactPistolOptions =
     // follower + top round (visible once the magazine is out)
     P.add(place(prism(rrect(0.0196, 0.0300, 0.003, 3), -0.0035, 0.004)), follower, MAG);
     const round = lathe([[0, 0], [0.00495, 0], [0.00495, 0.0185], [0.0047, 0.0195], [0.0040, 0.0235], [0.0026, 0.0272], [0.0010, 0.0290], [0, 0.0293]], seg(20));
-    P.add(round.rotateX(-Math.PI / 2).translate(0.0025, -0.0155, 0.0535), brass, MAG);
+    P.add(round.rotateX(-Math.PI / 2).translate(0.0025, -0.0155, 0.0535), brass, { ...MAG, round: true });
     // baseplate with a lip, retained by a floor plate insert
     const base = rrect(0.0262, 0.0392, 0.0032, 3);
     P.add(place(loft([{ z: 0.0995, prof: rrect(0.0232, 0.0348, 0.003, 3) }, { z: 0.1015, prof: base }, { z: 0.1075, prof: base }, { z: 0.1095, prof: rrect(0.0242, 0.0372, 0.0032, 3) }])), frame, MAG);
@@ -351,10 +351,10 @@ function gripPanelTransform(sx: number): Float32Array {
 export const COMPACT_PISTOL_GRIPS: WeaponGrips = {
   right: {
     position: [0.0285, -0.0326, 0.1253], fingerDir: [0, -0.309, -0.951], dorsal: [1, 0, 0],
-    fingers: [{ curl: [0.5, 0.7, 0.3], spread: 0.42 }, { curl: [1.25, 1.35, 0.7] }, { curl: [1.3, 1.35, 0.7] }, { curl: [1.35, 1.3, 0.7] }],
+    fingers: [{ curl: [0.5, 0.7, 0.3], spread: 0.1 }, { curl: [1.25, 1.35, 0.7] }, { curl: [1.3, 1.35, 0.7] }, { curl: [1.35, 1.3, 0.7] }],
     thumb: { dir: [-0.55, -0.55, -0.62], bend: [0.15, 0.1] },
   },
-  indexPressed: { curl: [0.55, 0.95, 0.45], spread: 0.42 },
+  indexPressed: { curl: [0.55, 0.95, 0.45], spread: 0.08 },
   left: {
     position: [-0.034, -0.0325, 0.0823], fingerDir: [0, -0.5, -0.866], dorsal: [-1, 0, 0],
     fingers: [{ curl: [1.15, 1.2, 0.6] }, { curl: [1.2, 1.2, 0.6] }, { curl: [1.2, 1.2, 0.6] }, { curl: [1.2, 1.15, 0.6] }],

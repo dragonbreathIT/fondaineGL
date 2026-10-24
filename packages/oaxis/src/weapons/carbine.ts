@@ -435,7 +435,7 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     // follower + top cartridge visible at the feed lips
     P.add(prism(rrect(0.0208, 0.050, 0.003, 3), -0.003, 0.004).rotateX(Math.PI / 2 + 0.17).translate(0, top[1] - 0.001, top[2]), new Material({ name: 'follower', baseColor: [0.75, 0.22, 0.03, 1], roughness: 0.6 }), MAG);
     const round = casingGeometry(0.0448, 0.0095, lathe);
-    P.add(round.rotateX(-Math.PI / 2).translate(0.0045, top[1] + 0.003, top[2] + 0.027), brass, MAG);
+    P.add(round.rotateX(-Math.PI / 2).translate(0.0045, top[1] + 0.003, top[2] + 0.027), brass, { ...MAG, round: true });
     // baseplate floor plate button
     const last = path[path.length - 1];
     P.add(tubeY(0.0032, 0.0012, 0, last[1] - 0.0004, last[2], 12), magPoly, MAG);
@@ -471,10 +471,10 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
 export const CARBINE_GRIPS: WeaponGrips = {
   right: {
     position: [0.0305, -0.049, 0.155], fingerDir: [0, -0.33, -0.94], dorsal: [1, 0, 0],
-    fingers: [{ curl: [0.25, 0.55, 0.3], spread: 0.35 }, { curl: [1.3, 1.3, 0.7] }, { curl: [1.3, 1.3, 0.7] }, { curl: [1.3, 1.25, 0.7] }],
+    fingers: [{ curl: [0.25, 0.55, 0.3], spread: 0.08 }, { curl: [1.3, 1.3, 0.7] }, { curl: [1.3, 1.3, 0.7] }, { curl: [1.3, 1.25, 0.7] }],
     thumb: { dir: [-0.6, -0.6, -0.5], bend: [0.25, 0.15] },
   },
-  indexPressed: { curl: [0.35, 0.8, 0.45], spread: 0.35 },
+  indexPressed: { curl: [0.35, 0.8, 0.45], spread: 0.06 },
   left: {
     position: [-0.064, -0.047, -0.278], fingerDir: [0.8, 0.15, -0.55], dorsal: [0, -1, 0],
     fingers: [{ curl: [1.1, 1.15, 0.6] }, { curl: [1.1, 1.2, 0.6] }, { curl: [1.1, 1.2, 0.6] }, { curl: [1.1, 1.15, 0.6] }],

@@ -117,7 +117,7 @@ export interface FirearmSpec {
 
 export interface FirearmModel {
   /** Parts in rifle-local space (+x right, +y up, −z towards the muzzle). */
-  parts: { object: RenderObject; local: Mat4; magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean; charge?: boolean }[];
+  parts: { object: RenderObject; local: Mat4; magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean; charge?: boolean; /** top cartridge of the magazine (hidden when empty) */ round?: boolean }[];
   muzzle: Vec3;
   ejectionPort: Vec3;
   rearSight: Vec3;
@@ -580,7 +580,7 @@ export class Firearm extends Behaviour {
         mat4.translate(M, M, [-sel.pivot[0], -sel.pivot[1], -sel.pivot[2]]);
       }
       mat4.multiply(M, M, p.local);
-      if (p.magazine) p.object.visible = A.magVisible;
+      if (p.magazine) p.object.visible = A.magVisible && (!p.round || this.rounds > 0);
     }
     void cam;
   }
@@ -713,8 +713,12 @@ export class Firearm extends Behaviour {
     this.mode = m[(m.indexOf(this.mode) + 1) % m.length];
     this.switchT = 0;
     const at = this.model.selector ? vec3.transformMat4(vec3.create(), this.model.selector.pivot, this.rootWorld) : this.local(this.model.ejectionPort);
-    const bright = this.mode === 'safe' ? 1.55 : this.mode === 'semi' ? 1.75 : 1.95;
-    this.audio.modal(receiverModes(bright), [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }], at, 0.9);
+    // detent click: a dry, very short double transient (lever leaves one notch, drops into the next), no ring
+    this.audio.whenReady(() => {
+      const v = this.audio.vorp; if (!v) return;
+      v.noise({ levelSpl: 74, attackMs: 0.2, decayMs: 4, hpHz: 1800, lpHz: 9000, thumpDb: -40 }, at);
+      v.noise({ levelSpl: 80, attackMs: 0.2, decayMs: 7, hpHz: 1200, lpHz: 8000, thumpDb: -22 }, at, { delayMs: 22 });
+    });
     this.input.rumble(0.15, 0.05, 25);
   }
 
@@ -847,7 +851,8 @@ export class Firearm extends Behaviour {
   /** Spawn the current magazine as a rigid body leaving the magwell (it clatters on the ground). */
   private dropMagazine() {
     const mb = this.model.magBox!, ax = this.model.magAxis ?? vec3.create(0, -1, 0);
-    const parts = this.model.parts.filter((p) => p.magazine);
+    // an empty magazine drops without its top round
+    const parts = this.model.parts.filter((p) => p.magazine && (!p.round || this.rounds > 0));
     if (!parts.length) return;
     const mass = 0.08 + 0.0118 * this.rounds * (this.spec.caliber.bulletMassKg / 0.008 * 0.5 + 0.5);
     const body = this.physics.createBody(BodyShape.Box, [mb.half[0], mb.half[1], mb.half[2]], mass, SURFACE.POLYMER);

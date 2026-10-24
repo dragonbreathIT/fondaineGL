@@ -101,4 +101,90 @@ export const FOOTSTEPS: Record<string, Record<string, number>> = {
   wood: { levelSpl: 76, attackMs: 3, decayMs: 90, hpHz: 100, lpHz: 4500, thumpHz: 120, thumpDb: 0, thumpMs: 70, grainsPerS: 60, grainDb: -16, resonance: 1.4 },
 };
 
+
+// ------------------------------------------------------------------------------------------ handling
+
+export interface MechPreset {
+  /** Noise layer (NOISE_PARAMS overrides at 1 m): the click / rasp / slap texture. */
+  noise: Record<string, number>;
+  /** Optional receiver-ring layer (modal hits on `receiverModes(brightness)`). */
+  ring?: { brightness: number; level: number; hits: { timeMs: number; amp: number; contactMs: number; noiseDb?: number }[] };
+}
+
+/**
+ * Weapon-handling sounds, at 1 m (the action sits ≈ 0.25–0.4 m from the shooter's ears, so they land
+ * 8–12 dB louder than listed). Use `vorp.mech('magRelease', pos)` for noise + ring, or
+ * `vorp.noise(MECH.magRelease.noise, pos)` for the texture alone. Levels put them 30–45 dB under a shot.
+ */
+export const MECH = {
+  /** Magazine release button: a short, bright latch click. */
+  magRelease: {
+    noise: { levelSpl: 72, attackMs: 0.15, decayMs: 22, hpHz: 1800, lpHz: 9500, thumpHz: 420, thumpDb: -10, thumpMs: 7, resonance: 1.3 },
+    ring: { brightness: 1.4, level: 0.7, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
+  },
+  /** Empty magazine slides out of the well (polymer on aluminium). */
+  magOut: {
+    noise: { levelSpl: 68, attackMs: 8, decayMs: 140, hpHz: 500, lpHz: 6000, thumpDb: -40, grainsPerS: 350, grainDb: -14, resonance: 0.8 },
+  },
+  /** Magazine landing on concrete: hard slap + bounce. */
+  magDropConcrete: {
+    noise: { levelSpl: 94, attackMs: 0.08, decayMs: 60, hpHz: 220, lpHz: 7500, thumpHz: 150, thumpDb: 3, thumpMs: 38, grainsPerS: 500, grainDb: -10, resonance: 1.1, hit2Ms: 48, hit2Db: -9 },
+    ring: { brightness: 0.55, level: 0.35, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
+  },
+  /** Magazine landing on dirt / grass: dull thud, no bounce. */
+  magDropDirt: {
+    noise: { levelSpl: 86, attackMs: 0.6, decayMs: 85, hpHz: 70, lpHz: 2400, thumpHz: 72, thumpDb: 5, thumpMs: 65, grainsPerS: 700, grainDb: -16, resonance: 0.75 },
+  },
+  /** Magazine seating: two-stage click (catch engages, then the mag seats fully ~35 ms later). */
+  magSeat: {
+    noise: { levelSpl: 84, attackMs: 0.1, decayMs: 34, hpHz: 650, lpHz: 8500, thumpHz: 230, thumpDb: -3, thumpMs: 22, resonance: 1.0, hit2Ms: 35, hit2Db: -2 },
+    ring: { brightness: 1.15, level: 0.9, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
+  },
+  /** Slide / carrier dragged back along the rails: a rasp with a spring hiss. */
+  slideRack: {
+    noise: { levelSpl: 74, attackMs: 5, decayMs: 125, hpHz: 750, lpHz: 7800, thumpDb: -40, grainsPerS: 1100, grainDb: -7, resonance: 0.9 },
+    ring: { brightness: 1.25, level: 0.6, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
+  },
+  /** Slide / carrier hits its rear stop. */
+  slideStop: {
+    noise: { levelSpl: 82, attackMs: 0.08, decayMs: 40, hpHz: 480, lpHz: 9500, thumpHz: 270, thumpDb: -2, thumpMs: 18, resonance: 1.0 },
+    ring: { brightness: 1.1, level: 0.9, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
+  },
+  /** Spring slams the slide / carrier home and chambers a round. */
+  slideHome: {
+    noise: { levelSpl: 90, attackMs: 0.05, decayMs: 58, hpHz: 280, lpHz: 10500, thumpHz: 175, thumpDb: 2, thumpMs: 30, resonance: 1.0, hit2Ms: 7, hit2Db: -9 },
+    ring: { brightness: 1.0, level: 1.1, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
+  },
+  /** AR charging handle: latch click, pull rasp, carrier reaches the rear. */
+  chargingHandle: {
+    noise: { levelSpl: 76, attackMs: 1.5, decayMs: 95, hpHz: 600, lpHz: 7200, thumpDb: -40, grainsPerS: 600, grainDb: -10, resonance: 0.9, hit2Ms: 65, hit2Db: -3 },
+    ring: { brightness: 1.3, level: 0.6, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
+  },
+  /** Bolt catch / slide stop slapped: a small, hard, bright click. */
+  boltCatch: {
+    noise: { levelSpl: 78, attackMs: 0.08, decayMs: 28, hpHz: 950, lpHz: 9500, thumpHz: 320, thumpDb: -8, thumpMs: 12, resonance: 1.2 },
+    ring: { brightness: 1.35, level: 0.6, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
+  },
+  /** Fire-selector detent. */
+  selector: {
+    noise: { levelSpl: 70, attackMs: 0.1, decayMs: 20, hpHz: 1500, lpHz: 9000, thumpDb: -40, resonance: 1.2, hit2Ms: 16, hit2Db: 2 },
+    ring: { brightness: 1.75, level: 0.9, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
+  },
+  /** Hammer falls on an empty chamber. */
+  dryFire: {
+    noise: { levelSpl: 74, attackMs: 0.05, decayMs: 18, hpHz: 1200, lpHz: 9000, thumpHz: 350, thumpDb: -12, thumpMs: 8, resonance: 1.1 },
+    ring: { brightness: 1.5, level: 0.5, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
+  },
+} satisfies Record<string, MechPreset>;
+
+export type MechName = keyof typeof MECH;
+
+/**
+ * A short, quiet human exhale: 0.5–0.65 s of soft filtered noise with a breathy formant.
+ * `levelSpl` is the 1 m value (≈ 45 dB) so that at 0.3 m — the shooter's own mouth — it reads ≈ 55 dB SPL.
+ */
+export const BREATH: Record<string, number> = {
+  levelSpl: 45, attackMs: 150, decayMs: 420, hpHz: 340, lpHz: 1900, thumpDb: -60, grainsPerS: 0, grainDb: -60, resonance: 1.7,
+};
+
 export { receiverModes };

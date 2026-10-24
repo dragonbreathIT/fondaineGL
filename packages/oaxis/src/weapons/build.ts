@@ -360,7 +360,7 @@ export function repeatZ(g: Geometry, n: number, pitch: number, z0 = 0): Geometry
 export function mirrorX(g: Geometry): Geometry { return g.clone().scale(-1, 1, 1); }
 
 // ---------------------------------------------------------------------------------------------- parts
-export interface PartFlags { magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean; charge?: boolean }
+export interface PartFlags { magazine?: boolean; bolt?: boolean; trigger?: boolean; selector?: boolean; charge?: boolean; /** the top cartridge in the magazine: hidden when the magazine is empty */ round?: boolean }
 
 /**
  * Collects geometry per (material, animation flags) and merges each bucket into one draw call.
@@ -373,7 +373,7 @@ export class PartBuilder {
   constructor(private renderer: Renderer) {}
 
   add(g: Geometry, m: Material, flags: PartFlags = {}) {
-    const key = `${m.id}|${flags.magazine ? 1 : 0}${flags.bolt ? 1 : 0}${flags.trigger ? 1 : 0}${flags.selector ? 1 : 0}${flags.charge ? 1 : 0}`;
+    const key = `${m.id}|${flags.magazine ? 1 : 0}${flags.bolt ? 1 : 0}${flags.trigger ? 1 : 0}${flags.selector ? 1 : 0}${flags.charge ? 1 : 0}${flags.round ? 1 : 0}`;
     const b = this.buckets.get(key) ?? { m, geoms: [], flags };
     b.geoms.push(g.tangents ? g : g.computeTangents());
     this.triangles += g.triangleCount;
