@@ -125,7 +125,7 @@ if (params.get('arms') !== '0') {
   // a real rigged character (assets slot "arms", e.g. from Mixamo) beats the procedural gloves
   const rig = assets?.hasModel('arms') ? await assets.model('arms', false) : null;
   try { if (rig) arms = new SkinnedArms(engine.renderer, rig).addTo(engine.scene); } catch (e) { console.warn('rigged arms unusable, using procedural hands', e); }
-  arms ??= new FirstPersonArms(engine.renderer).addTo(engine.scene);
+  arms ??= new FirstPersonArms(engine.renderer, { skin: 'glove' }).addTo(engine.scene);
 }
 // scanned vegetation LODs follow the camera
 engine.onUpdate.push(() => { for (const l of range.lods) l.update(engine.camera.position); });

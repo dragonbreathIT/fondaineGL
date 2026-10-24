@@ -53,7 +53,7 @@ const rest = (m: FirearmModel) => {
 };
 const anim = { slide: num('slide', 0), mag: num('mag', 0), trigger: num('trigger', 0) };
 // gloved hands + arms on the weapon's grip poses (?hands=1; ?eye=1 solves the arms from a virtual eye)
-let arms: { update: FirstPersonArms['update']; } | null = params.get('hands') === '1' ? new FirstPersonArms(engine.renderer, { viewmodel: false }).addTo(engine.scene) : null;
+let arms: { update: FirstPersonArms['update']; } | null = params.get('hands') === '1' ? new FirstPersonArms(engine.renderer, { viewmodel: false, skin: params.get('glove') === '1' ? 'glove' : 'bare' }).addTo(engine.scene) : null;
 if (params.get('rig') === '1') {
   // real rigged arms from assets/manifest.json slot "arms" (e.g. a Mixamo character)
   const lib = await AssetLibrary.load(engine.renderer, '../../assets/');

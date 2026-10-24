@@ -8,11 +8,11 @@ import { TextureCache } from './texture';
 
 export type RecipeKind =
   | 'concrete' | 'wood' | 'anodized' | 'parkerized' | 'polymer' | 'paintedSteel' | 'ground' | 'gravel'
-  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass' | 'nitride' | 'machined' | 'skin';
+  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass' | 'nitride' | 'machined' | 'skin' | 'glove';
 
 const KIND_ID: Record<RecipeKind, number> = {
   concrete: 0, wood: 1, anodized: 2, parkerized: 3, polymer: 4, paintedSteel: 5, ground: 6, gravel: 7,
-  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14, nitride: 15, machined: 16, skin: 17,
+  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14, nitride: 15, machined: 16, skin: 17, glove: 18,
 };
 
 export interface RecipeParams {
@@ -324,6 +324,31 @@ fn recipe(uv: vec2f) -> S {
       s.rough = select(P.misc.y, 0.32, P.misc.y < 0.0) + 0.18 * turn * extra + 0.05 * fine + 0.2 * tarn - 0.08 * sc;
       s.height = 0.5 + 0.12 * turn2 * extra + 0.04 * fine - 0.2 * sc;
     }
+    case 18u: { // tactical glove: stretch knit (extra 0) or synthetic suede palm / leather trim (extra 1), worn
+      let fuzz = fbm(uv, 48, 3, seed);
+      if (extra < 0.5) {
+        // knit: fine diagonal rib (≈0.6 mm courses), slight sheen on the ridges, dust in the valleys
+        let course = 0.5 + 0.5 * sin((uv.x * 0.7 + uv.y) * 6.2831853 * 42.0);
+        let wale = 0.5 + 0.5 * sin((uv.x - uv.y * 0.3) * 6.2831853 * 110.0);
+        let knit = course * (0.6 + 0.4 * wale);
+        let wearN = smoothstep(0.55, 0.9, fbm(uv, 5, 4, seed + 7u) * 0.5 + 0.5) * wear;
+        s.albedo = mix(P.color.rgb * (0.78 + 0.3 * knit + 0.06 * fuzz), P.color.rgb * 1.6 + vec3f(0.03), wearN * 0.6);
+        s.rough = 0.78 - 0.1 * knit + 0.08 * fuzz;
+        s.height = 0.35 + 0.5 * knit;
+        s.ao = 0.8 + 0.2 * knit;
+      } else {
+        // synthetic suede / leather: pebbled grain, darker creases, polished where it rubs the gun
+        let grain = worley(uv, 140, seed + 3u);
+        let crease = smoothstep(0.75, 0.95, fbm(uv, 10, 4, seed + 11u) * 0.5 + 0.5);
+        let polish = smoothstep(0.5, 0.85, fbm(uv, 4, 4, seed + 19u) * 0.5 + 0.5) * wear;
+        var c = P.color.rgb * (0.85 + 0.25 * grain.x + 0.05 * fuzz);
+        c = mix(c, c * 0.6, crease);
+        s.albedo = mix(c, c * 1.25, polish);
+        s.rough = mix(0.68 + 0.15 * grain.x, 0.42, polish);
+        s.height = 0.5 + 0.25 * (1.0 - grain.x) - 0.2 * crease;
+        s.ao = 1.0 - 0.3 * crease;
+      }
+    }
     case 17u: { // human skin (bare hands / forearm); extra = 1 → fingernail plate
       let tone = P.color.rgb;
       if (extra > 0.5) {
@@ -423,6 +448,7 @@ const DEFAULTS: Record<RecipeKind, Required<Omit<RecipeParams, 'size' | 'seed'>>
   nitride: { tileMeters: 0.12, color: [0.028, 0.029, 0.032], color2: [0, 0, 0], wear: 0.2, dirt: 0, roughness: -1, bumpMm: 0.015, extra: 0 },
   machined: { tileMeters: 0.06, color: [0.62, 0.62, 0.63], color2: [0, 0, 0], wear: 0.15, dirt: 0, roughness: -1, bumpMm: 0.01, extra: 1 },
   skin: { tileMeters: 0.05, color: [0.56, 0.33, 0.24], color2: [0, 0, 0], wear: 0, dirt: 0, roughness: -1, bumpMm: 0.12, extra: 0 },
+  glove: { tileMeters: 0.04, color: [0.045, 0.043, 0.04], color2: [0, 0, 0], wear: 0.35, dirt: 0.1, roughness: -1, bumpMm: 0.12, extra: 0 },
 };
 
 export class MaterialSynth {

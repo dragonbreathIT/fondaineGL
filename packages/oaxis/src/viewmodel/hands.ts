@@ -7,7 +7,7 @@
 // Hand frame (both hands): origin at the wrist centre, −z = towards the fingers (wrist → knuckles),
 // +y = back of the hand (dorsal), palm faces −y. Right thumb on −x, left thumb on +x.
 
-import { Geometry, Material, Mesh, RenderObject, Renderer, mat4, Mat4, quat, Quat, vec3, Vec3, cylinder, lathe } from '@fondaine/gl';
+import { Geometry, Material, Mesh, RenderObject, Renderer, mat4, Mat4, quat, Quat, vec3, Vec3, cylinder, lathe, roundedBox } from '@fondaine/gl';
 import { OAXIS, seg } from '../tuning';
 import { BONES, BoneFrame, basisQuat, bindInverses, buildHandMesh, handBoneFrames, mirrorX } from './hand-mesh';
 
@@ -63,6 +63,7 @@ const SLEEVE_START = 0.10;
 const SKINNED_FOREARM = 0.12;
 
 interface Side {
+  trim: RenderObject[];
   side: 1 | -1;
   hand: RenderObject;
   nails: RenderObject;
@@ -103,7 +104,8 @@ export class FirstPersonArms {
     const bare = this.options.skin === 'bare';
     const skin = bare
       ? synth.material('skin', { size, tileMeters: 0.05, color: this.options.skinColor, seed: 71 }, { name: 'skin', specular: 0.35, normalScale: 0.85 })
-      : synth.material('webbing', { size, tileMeters: 0.025, color: this.options.gloveColor, seed: 61 }, { name: 'glove-fabric' });
+      : synth.material('glove', { size, tileMeters: 0.04, color: this.options.gloveColor, seed: 61 }, { name: 'glove-knit', specular: 0.3, normalScale: 0.9 });
+    const gloveTrim = synth.material('glove', { size: 1024, tileMeters: 0.05, color: this.options.palmColor, extra: 1, seed: 64 }, { name: 'glove-leather', specular: 0.4 });
     const nail = synth.material('skin', { size: 512, tileMeters: 0.02, color: this.options.skinColor, extra: 1, seed: 72 }, { name: 'nail', specular: 0.6, normalScale: 0.5 });
     const sleeve = synth.material('webbing', { size, tileMeters: 0.06, color: this.options.sleeveColor, seed: 63 }, { name: 'sleeve' });
     const dev = renderer.dev;
@@ -121,6 +123,10 @@ export class FirstPersonArms {
     this.sleeveLength = Lf - SLEEVE_START + 0.03;
     const sleeveGeo = sleeveTube(this.sleeveLength);
     const upperGeo = cylinder(0.046, 0.054, 1, seg(20)).rotateX(Math.PI / 2).translate(0, 0, -0.5).scale(1, 0.88, 1);
+    // glove trim: a leather wrist cuff with a hook-and-loop closure strap + pull tab, and a padded knuckle panel.
+    // Both are rigid to the hand root (the cuff sits on the wrist, the panel on the metacarpals).
+    const cuffGeo = gloveCuff();
+    const knuckleGeo = knucklePanel();
     for (const side of [1, -1] as const) {
       const geo = side === 1 ? built.geometry : mirrorX(built.geometry);
       const nailGeo = side === 1 ? built.nails : mirrorX(built.nails);
@@ -131,8 +137,13 @@ export class FirstPersonArms {
       hand.joints = joints;
       nails.joints = joints;
       nails.visible = bare;
+      const trim: RenderObject[] = [];
+      if (!bare) {
+        trim.push(mk(side === 1 ? cuffGeo : mirrorX(cuffGeo), gloveTrim, `cuff-${side}`));
+        trim.push(mk(side === 1 ? knuckleGeo : mirrorX(knuckleGeo), gloveTrim, `knuckles-${side}`));
+      }
       this.sides.push({
-        side, hand, nails, joints,
+        side, hand, nails, joints, trim,
         sleeve: mk(sleeveGeo, sleeve, `sleeve-${side}`),
         upper: mk(upperGeo, sleeve, `upper-${side}`),
         bindInv: side === 1 ? built.bindInverse : bindInverses(-1, Lf),
@@ -164,6 +175,7 @@ export class FirstPersonArms {
     const L = this.sides[1];
     const show = !!left;
     L.hand.visible = L.sleeve.visible = L.upper.visible = show;
+    for (const t of L.trim) t.visible = show;
     L.nails.visible = show && this.options.skin === 'bare';
     if (left) this.poseHand(L, weaponRoot, left, eye, this.options.shoulderLeft);
   }
@@ -173,6 +185,7 @@ export class FirstPersonArms {
     const q = basisQuat(pose.fingerDir, pose.dorsal);
     const local = mat4.fromRotationTranslation(mat4.create(), q, pose.position);
     const hand = mat4.multiply(mat4.create(), root, local);
+    for (const t of S.trim) t.setTransform(hand);
     // NB: the skinned vertex path still applies the object transform, so skinned objects stay at identity
     // (joint matrices are world-space). Culling uses the bind-pose bounds around the weapon origin.
     // hand bones: FK in hand space → world → joint matrix (world × inverse bind)
@@ -234,6 +247,23 @@ export class FirstPersonArms {
     // the upper arm continues past the shoulder joint into the torso (its end is never visible)
     segTo(S.upper, vec3.scaleAndAdd(vec3.create(), elbow, ued, -0.02), vec3.scaleAndAdd(vec3.create(), shoulder, ued, 0.4), upB, 1);
   }
+}
+
+/** Glove cuff around the wrist (hand space: wrist at the origin, forearm towards +z): leather band, closure strap, pull tab. */
+function gloveCuff(): Geometry {
+  // wrist skin ≈ 58 × 37 mm; the cuff hugs it with 2 mm of leather, from 6 mm before the wrist to 38 mm up the forearm
+  const band = lathe([[0.0295, -0.006], [0.0315, -0.004], [0.0325, 0.0], [0.0335, 0.014], [0.0345, 0.03], [0.0335, 0.038], [0.0310, 0.040], [0.0295, 0.038]], seg(26)).rotateX(-Math.PI / 2).scale(1, 0.66, 1);
+  // closure strap across the back of the wrist (dorsal = +y), 18 mm wide, ending in a pull tab
+  const strap = roundedBox(0.062, 0.0032, 0.018, 0.001).translate(0.004, 0.0255, 0.021);
+  const tab = roundedBox(0.016, 0.0036, 0.018, 0.0012).translate(0.041, 0.0245, 0.021);
+  return Geometry.merge([band, strap, tab]).computeTangents();
+}
+
+/** Padded knuckle panel on the back of the hand (metacarpals): a low rounded plate, hand space. */
+function knucklePanel(): Geometry {
+  const plate = roundedBox(0.066, 0.006, 0.030, 0.0028, 4).translate(0, 0.0165, -0.070);
+  { const p = plate.positions; for (let k = 0; k < p.length; k += 3) { const xn = p[k] / 0.033; p[k + 1] -= 0.0032 * xn * xn; } } // arched across the hand
+  return plate.computeNormals().computeTangents();
 }
 
 /** Pushed-up shirt sleeve along −z: rolled cuff, then a loose tube to the elbow (length `len`). */
