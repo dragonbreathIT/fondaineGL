@@ -1,12 +1,17 @@
-// First-person arms for oAxis: gloved hands with articulated fingers (forward kinematics from grip poses
-// authored per weapon) and sleeved forearms / upper arms solved with two-bone IK from the shoulders.
-// Everything is real-scale (adult male, size L tactical gloves) and rendered as viewmodel geometry.
+// First-person arms for oAxis: procedurally generated, skinned bare hands (or gloves) with articulated
+// fingers (forward kinematics from grip poses authored per weapon) and forearms / upper arms solved with
+// two-bone IK from the shoulders. Everything is real-scale (adult male, 19 cm hand) and rendered as
+// viewmodel geometry. The hand + wrist + lower forearm is ONE skinned mesh (see hand-mesh.ts); the
+// sleeved part of the forearm and the upper arm are stretched tubes.
 //
 // Hand frame (both hands): origin at the wrist centre, −z = towards the fingers (wrist → knuckles),
 // +y = back of the hand (dorsal), palm faces −y. Right thumb on −x, left thumb on +x.
 
-import { Geometry, Material, Mesh, RenderObject, Renderer, mat4, Mat4, quat, Quat, vec3, Vec3, cylinder, roundedBox, sphere, lathe } from '@fondaine/gl';
+import { Geometry, Material, Mesh, RenderObject, Renderer, mat4, Mat4, quat, Quat, vec3, Vec3, cylinder, lathe } from '@fondaine/gl';
 import { OAXIS, seg } from '../tuning';
+import { BONES, BoneFrame, basisQuat, bindInverses, buildHandMesh, handBoneFrames, mirrorX } from './hand-mesh';
+
+export { basisQuat } from './hand-mesh';
 
 export interface FingerPose { curl: [number, number, number]; spread?: number }
 export interface ThumbPose {
@@ -34,6 +39,10 @@ export interface WeaponGrips {
 }
 
 export interface ArmsOptions {
+  /** Bare skin (default) or a tactical glove (same mesh, fabric material, no nails). */
+  skin?: 'bare' | 'glove';
+  /** Skin tone (linear RGB). */
+  skinColor?: [number, number, number];
   gloveColor?: [number, number, number];
   palmColor?: [number, number, number];
   sleeveColor?: [number, number, number];
@@ -44,58 +53,41 @@ export interface ArmsOptions {
   upperArmLength?: number;
   /** Render as first-person viewmodel geometry (default true; the viewer uses false). */
   viewmodel?: boolean;
+  /** SDF sampling cell for the hand mesh (m); default from the oAxis detail setting (≈2.2 mm). */
+  meshCell?: number;
 }
 
-// ---------------------------------------------------------------------------------------- anatomy (m)
-// finger bases relative to the wrist (right hand), phalanx lengths and radii (gloved)
-const FINGERS = [
-  { base: [-0.030, 0.004, -0.093], len: [0.046, 0.027, 0.023], r: [0.0098, 0.0091, 0.0084] }, // index
-  { base: [-0.0095, 0.005, -0.097], len: [0.051, 0.031, 0.024], r: [0.0101, 0.0094, 0.0086] }, // middle
-  { base: [0.0115, 0.004, -0.094], len: [0.048, 0.029, 0.023], r: [0.0096, 0.0089, 0.0082] }, // ring
-  { base: [0.0305, 0.002, -0.085], len: [0.037, 0.022, 0.020], r: [0.0088, 0.0082, 0.0076] }, // pinky
-];
-const THUMB = { base: [-0.030, -0.008, -0.024], len: [0.044, 0.034, 0.029], r: [0.0128, 0.0112, 0.0102] };
-const PALM = { w: 0.084, h: 0.027, l: 0.097 };
+/** Where the skinned forearm hands over to the sleeve (hand space z, m). */
+const SLEEVE_START = 0.10;
+/** The skinned mesh extends a little past the sleeve start so the cuff always covers the cap. */
+const SKINNED_FOREARM = 0.12;
 
-/** Unit quaternion whose local −z = `fwd` and local +y ≈ `up` (orthogonalised). */
-export function basisQuat(fwd: ArrayLike<number>, up: ArrayLike<number>, out: Quat = quat.create()): Quat {
-  const z = vec3.normalize(vec3.create(), vec3.set(vec3.create(), -fwd[0], -fwd[1], -fwd[2]));
-  const u = vec3.set(vec3.create(), up[0], up[1], up[2]);
-  const y = vec3.normalize(vec3.create(), vec3.scaleAndAdd(vec3.create(), u, z, -vec3.dot(u, z)));
-  const x = vec3.cross(vec3.create(), y, z);
-  const m = mat4.create();
-  m[0] = x[0]; m[1] = x[1]; m[2] = x[2];
-  m[4] = y[0]; m[5] = y[1]; m[6] = y[2];
-  m[8] = z[0]; m[9] = z[1]; m[10] = z[2];
-  return mat4.getRotation(out, m);
+interface Side {
+  side: 1 | -1;
+  hand: RenderObject;
+  nails: RenderObject;
+  sleeve: RenderObject;
+  upper: RenderObject;
+  joints: Float32Array;
+  bindInv: Mat4[];
+  frames: BoneFrame[];
 }
-
-/** Capsule along −z from 0 to −len. */
-function capsuleZ(r: number, len: number): Geometry {
-  const n = seg(14);
-  const prof: [number, number][] = [];
-  for (let i = 0; i <= 6; i++) { const a = (i / 6) * Math.PI / 2; prof.push([Math.sin(a) * r, -Math.cos(a) * r]); }
-  for (let i = 0; i <= 6; i++) { const a = (i / 6) * Math.PI / 2; prof.push([Math.cos(a) * r, len + Math.sin(a) * r]); }
-  return lathe(prof, n).rotateX(-Math.PI / 2);
-}
-
-/** Tapered tube along −z (r0 at z = 0, r1 at z = −len), slightly elliptical. */
-function limbZ(r0: number, r1: number, len: number, flat = 0.85): Geometry {
-  return cylinder(r0, r1, len, seg(20)).rotateX(Math.PI / 2).translate(0, 0, -len / 2).scale(1, flat, 1);
-}
-
-interface Piece { obj: RenderObject; key: string }
 
 export class FirstPersonArms {
   readonly objects: RenderObject[] = [];
   readonly options: Required<ArmsOptions>;
   visible = true;
-  private hands: { pieces: Map<string, RenderObject>; side: 1 | -1 }[] = [];
-  private arms: { fore: RenderObject; upper: RenderObject; cuff: RenderObject }[] = [];
+  /** Generation statistics of the hand mesh (triangles, ms). */
+  readonly meshStats: ReturnType<typeof buildHandMesh>['stats'];
+  private sides: Side[] = [];
+  private sleeveLength: number;
   private tmp = mat4.create();
+  private tmp2 = mat4.create();
 
   constructor(private renderer: Renderer, o: ArmsOptions = {}) {
     this.options = {
+      skin: o.skin ?? 'bare',
+      skinColor: o.skinColor ?? [0.56, 0.36, 0.27],
       gloveColor: o.gloveColor ?? [0.035, 0.033, 0.03],
       palmColor: o.palmColor ?? [0.06, 0.05, 0.04],
       sleeveColor: o.sleeveColor ?? [0.075, 0.08, 0.065],
@@ -104,53 +96,57 @@ export class FirstPersonArms {
       forearmLength: o.forearmLength ?? 0.27,
       upperArmLength: o.upperArmLength ?? 0.31,
       viewmodel: o.viewmodel ?? true,
+      meshCell: o.meshCell ?? Math.min(0.0035, Math.max(0.0016, 0.0033 / OAXIS.detail)),
     };
     const synth = renderer.synth;
     const size = Math.min(OAXIS.textureSize, 2048);
-    const glove = synth.material('webbing', { size, tileMeters: 0.025, color: this.options.gloveColor, seed: 61 }, { name: 'glove-fabric' });
-    const palm = synth.material('rubber', { size: 1024, tileMeters: 0.04, color: this.options.palmColor, seed: 62 }, { name: 'glove-palm' });
+    const bare = this.options.skin === 'bare';
+    const skin = bare
+      ? synth.material('skin', { size, tileMeters: 0.05, color: this.options.skinColor, seed: 71 }, { name: 'skin', specular: 0.35, normalScale: 0.85 })
+      : synth.material('webbing', { size, tileMeters: 0.025, color: this.options.gloveColor, seed: 61 }, { name: 'glove-fabric' });
+    const nail = synth.material('skin', { size: 512, tileMeters: 0.02, color: this.options.skinColor, extra: 1, seed: 72 }, { name: 'nail', specular: 0.6, normalScale: 0.5 });
     const sleeve = synth.material('webbing', { size, tileMeters: 0.06, color: this.options.sleeveColor, seed: 63 }, { name: 'sleeve' });
     const dev = renderer.dev;
-    const mk = (g: Geometry, m: Material) => {
-      const obj = new RenderObject(new Mesh(dev, g.computeTangents()), m);
+    const mk = (g: Geometry, m: Material, label: string) => {
+      const obj = new RenderObject(new Mesh(dev, g, { label }), m);
       obj.viewmodel = this.options.viewmodel;
       obj.castShadow = !this.options.viewmodel;
       this.objects.push(obj);
       return obj;
     };
+    const Lf = this.options.forearmLength;
+    const built = buildHandMesh({ cell: this.options.meshCell, forearmLength: Lf, skinnedForearm: SKINNED_FOREARM });
+    this.meshStats = built.stats;
+    // sleeve: pushed-up combat-shirt sleeve from the lower forearm to just past the elbow, real length
+    this.sleeveLength = Lf - SLEEVE_START + 0.03;
+    const sleeveGeo = sleeveTube(this.sleeveLength);
+    const upperGeo = cylinder(0.046, 0.054, 1, seg(20)).rotateX(Math.PI / 2).translate(0, 0, -0.5).scale(1, 0.88, 1);
     for (const side of [1, -1] as const) {
-      const pieces = new Map<string, RenderObject>();
-      // palm: dorsal fabric shell + grippy palm pad
-      // palm: rounded, narrower at the wrist, thinner at the knuckles, with the thenar (thumb) muscle pad
-      const pg = roundedBox(PALM.w, PALM.h, PALM.l, 0.0125, 5).translate(0, 0.002, -PALM.l / 2 - 0.004);
-      { const p = pg.positions; for (let k = 0; k < p.length; k += 3) {
-        const u = Math.min(1, Math.max(0, -p[k + 2] / PALM.l));
-        p[k] *= 0.8 + 0.2 * Math.sin(u * Math.PI * 0.6);
-        p[k + 1] *= 1 - 0.18 * u * u;
-        // domed back of the hand with metacarpal ridges towards the knuckles
-        if (p[k + 1] > 0) { const xn = p[k] / (PALM.w / 2); p[k + 1] += (0.0045 * (1 - xn * xn) + 0.0012 * Math.cos(xn * Math.PI * 3.5) * u) * Math.sin(Math.PI * Math.min(1, u * 1.1)); }
-      } }
-      pieces.set('palm', mk(pg, glove));
-      const pad = sphere(1, 18, 12).scale(PALM.w * 0.42, 0.011, PALM.l * 0.36).translate(0, -PALM.h / 2 + 0.004, -PALM.l * 0.55);
-      pieces.set('pad', mk(Geometry.merge([pad, sphere(1, 14, 10).scale(0.02, 0.014, 0.033).translate(-0.025 * side, -0.007, -0.032)]), palm));
-      FINGERS.forEach((f, i) => f.len.forEach((L, j) => pieces.set(`f${i}${j}`, mk(capsuleZ(f.r[j], L), j === 0 ? glove : palm))));
-      THUMB.len.forEach((L, j) => pieces.set(`t${j}`, mk(capsuleZ(THUMB.r[j], L), j === 0 ? glove : palm)));
-      // knuckle guard (moulded strip across the back of the hand)
-      pieces.set('guard', mk(roundedBox(PALM.w * 0.9, 0.008, 0.022, 0.004).translate(0, PALM.h / 2 + 0.002, -PALM.l + 0.012), palm));
-      this.hands.push({ pieces, side });
-      const L = this.options.forearmLength, U = this.options.upperArmLength;
-      this.arms.push({
-        cuff: mk(limbZ(0.031, 0.033, 0.055), glove),
-        // unit-length limbs, stretched to the solved segment length each frame
-        fore: mk(limbZ(0.034, 0.044, 1), sleeve),
-        upper: mk(limbZ(0.045, 0.052, 1), sleeve),
+      const geo = side === 1 ? built.geometry : mirrorX(built.geometry);
+      const nailGeo = side === 1 ? built.nails : mirrorX(built.nails);
+      const joints = new Float32Array(BONES.count * 16);
+      for (let b = 0; b < BONES.count; b++) mat4.identity(joints.subarray(b * 16, b * 16 + 16) as unknown as Mat4);
+      const hand = mk(geo, skin, `hand-${side}`);
+      const nails = mk(nailGeo, nail, `nails-${side}`);
+      hand.joints = joints;
+      nails.joints = joints;
+      nails.visible = bare;
+      this.sides.push({
+        side, hand, nails, joints,
+        sleeve: mk(sleeveGeo, sleeve, `sleeve-${side}`),
+        upper: mk(upperGeo, sleeve, `upper-${side}`),
+        bindInv: side === 1 ? built.bindInverse : bindInverses(-1, Lf),
+        frames: Array.from({ length: BONES.count }, () => ({ p: vec3.create(), q: quat.create() })),
       });
     }
-    void sphere;
   }
 
   addTo(scene: { add(o: RenderObject): unknown }) { for (const o of this.objects) scene.add(o); return this; }
-  setVisible(v: boolean) { this.visible = v; for (const o of this.objects) o.visible = v; }
+  setVisible(v: boolean) {
+    this.visible = v;
+    for (const o of this.objects) o.visible = v;
+    if (v && this.options.skin !== 'bare') for (const s of this.sides) s.nails.visible = false;
+  }
 
   /**
    * Pose the arms. `weaponRoot` = weapon world matrix; `eye` = eye position + rotation (for the shoulders);
@@ -161,57 +157,38 @@ export class FirstPersonArms {
     const right = grips.right;
     const idx = grips.indexPressed && (o.trigger ?? 0) > 0 ? blendFinger(right.fingers[0], grips.indexPressed, o.trigger ?? 0) : right.fingers[0];
     const rp: HandPose = { ...right, fingers: [idx, right.fingers[1], right.fingers[2], right.fingers[3]] };
-    this.poseHand(0, weaponRoot, rp, eye, this.options.shoulderRight);
+    this.poseHand(this.sides[0], weaponRoot, rp, eye, this.options.shoulderRight);
     let left = grips.left ?? null;
     if (o.leftOverride && left) left = blendPose(left, o.leftOverride, o.leftWeight ?? 1);
     else if (o.leftOverride) left = o.leftOverride;
-    const lh = this.hands[1], la = this.arms[1];
+    const L = this.sides[1];
     const show = !!left;
-    for (const p of lh.pieces.values()) p.visible = show;
-    la.fore.visible = la.upper.visible = la.cuff.visible = show;
-    if (left) this.poseHand(1, weaponRoot, left, eye, this.options.shoulderLeft);
+    L.hand.visible = L.sleeve.visible = L.upper.visible = show;
+    L.nails.visible = show && this.options.skin === 'bare';
+    if (left) this.poseHand(L, weaponRoot, left, eye, this.options.shoulderLeft);
   }
 
-  private poseHand(i: number, root: Mat4, pose: HandPose, eye: { position: ArrayLike<number>; rotation: Quat } | null, shoulderEye: [number, number, number]) {
-    const h = this.hands[i], side = h.side;
+  private poseHand(S: Side, root: Mat4, pose: HandPose, eye: { position: ArrayLike<number>; rotation: Quat } | null, shoulderEye: [number, number, number]) {
+    const side = S.side;
     const q = basisQuat(pose.fingerDir, pose.dorsal);
     const local = mat4.fromRotationTranslation(mat4.create(), q, pose.position);
     const hand = mat4.multiply(mat4.create(), root, local);
-    const mirror = (v: ArrayLike<number>): [number, number, number] => [v[0] * side, v[1], v[2]];
-    h.pieces.get('palm')!.setTransform(hand);
-    h.pieces.get('pad')!.setTransform(hand);
-    h.pieces.get('guard')!.setTransform(hand);
-    // fingers: FK — flexion rotates −z towards −y (palm) about +x; spread about +y
-    FINGERS.forEach((f, fi) => {
-      const fp = pose.fingers[fi];
-      const m = mat4.translate(mat4.create(), hand, mirror(f.base));
-      const spread = (fp.spread ?? 0) * side;
-      let acc = quat.fromEuler(quat.create(), 0, spread, 0);
-      for (let j = 0; j < 3; j++) {
-        acc = quat.multiply(quat.create(), acc, quat.fromEuler(quat.create(), -fp.curl[j], 0, 0));
-        const segM = mat4.multiply(mat4.create(), m, mat4.fromQuat(mat4.create(), acc));
-        h.pieces.get(`f${fi}${j}`)!.setTransform(segM);
-        // advance to the next joint along the rotated −z
-        const d = vec3.transformQuat(vec3.create(), [0, 0, -f.len[j]], acc);
-        mat4.translate(m, m, d); // m stays a translation-only joint frame in hand space
-      }
-    });
-    // thumb: metacarpal along `dir`, phalanges bend towards the palm
-    {
-      const d0 = vec3.normalize(vec3.create(), vec3.create(pose.thumb.dir[0] * side, pose.thumb.dir[1], pose.thumb.dir[2]));
-      const qa = basisQuat(d0, [0, 1, 0]);
-      const m = mat4.translate(mat4.create(), hand, mirror(THUMB.base));
-      let acc = qa;
-      for (let j = 0; j < 3; j++) {
-        if (j > 0) acc = quat.multiply(quat.create(), acc, quat.fromEuler(quat.create(), -pose.thumb.bend[j - 1], 0, 0));
-        h.pieces.get(`t${j}`)!.setTransform(mat4.multiply(mat4.create(), m, mat4.fromQuat(mat4.create(), acc)));
-        mat4.translate(m, m, vec3.transformQuat(vec3.create(), [0, 0, -THUMB.len[j]], acc));
-      }
+    // NB: the skinned vertex path still applies the object transform, so skinned objects stay at identity
+    // (joint matrices are world-space). Culling uses the bind-pose bounds around the weapon origin.
+    // hand bones: FK in hand space → world → joint matrix (world × inverse bind)
+    const frames = handBoneFrames(pose.fingers, pose.thumb, side, S.frames);
+    const J = S.joints, tmp = this.tmp, tmp2 = this.tmp2;
+    for (let b = 0; b < BONES.foreA; b++) {
+      mat4.fromRotationTranslation(tmp, frames[b].q, frames[b].p);
+      mat4.multiply(tmp2, hand, tmp);
+      mat4.multiply(tmp, tmp2, S.bindInv[b]);
+      J.set(tmp, b * 16);
     }
     // arm: wrist → elbow → shoulder (two-bone IK), or straight back along the hand when no eye is given
-    const wrist = vec3.transformMat4(vec3.create(), [0, 0, 0.004], hand);
-    const handBack = vec3.normalize(vec3.create(), vec3.transformQuat(vec3.create(), [0, 0, 1], mat4.getRotation(quat.create(), hand)));
-    const A = this.arms[i];
+    const wrist = vec3.transformMat4(vec3.create(), [0, 0, 0], hand);
+    const handQ = mat4.getRotation(quat.create(), hand);
+    const handBack = vec3.normalize(vec3.create(), vec3.transformQuat(vec3.create(), [0, 0, 1], handQ));
+    const handUp = vec3.transformQuat(vec3.create(), [0, 1, 0], handQ);
     const Lf = this.options.forearmLength, Lu = this.options.upperArmLength;
     let elbow: Vec3, shoulder: Vec3;
     if (eye) {
@@ -225,21 +202,48 @@ export class FirstPersonArms {
       elbow = vec3.scaleAndAdd(vec3.create(), wrist, handBack, Lf);
       shoulder = vec3.scaleAndAdd(vec3.create(), elbow, handBack, Lu);
     }
-    const segTo = (obj: RenderObject, a: Vec3, b: Vec3, up: ArrayLike<number>, stretch = 0) => {
+    const toElbow = vec3.sub(vec3.create(), elbow, wrist);
+    const foreLen = vec3.length(toElbow);
+    const axis = vec3.scale(vec3.create(), toElbow, 1 / Math.max(foreLen, 1e-6));
+    const fwd = vec3.negate(vec3.create(), axis); // bone frames have +z along the forearm (wrist → elbow)
+    // forearm twist: the wrist end follows the hand (pronation), the elbow end faces away from the upper arm
+    const ue = vec3.sub(vec3.create(), shoulder, elbow);
+    const proj = vec3.scaleAndAdd(vec3.create(), ue, axis, -vec3.dot(ue, axis));
+    const upB = vec3.normalize(vec3.create(), vec3.scaleAndAdd(vec3.create(), handUp, proj, -1 / Lu * 1.4));
+    {
+      // bone A (wrist end): bind = identity at the wrist
+      mat4.fromRotationTranslation(tmp, basisQuat(fwd, handUp), wrist);
+      J.set(tmp, BONES.foreA * 16);
+      // bone B (elbow end): bind = translation (0, 0, Lf); the mesh stretches to the solved length
+      mat4.fromRotationTranslation(tmp2, basisQuat(fwd, upB), elbow);
+      mat4.multiply(tmp, tmp2, S.bindInv[BONES.foreB]);
+      J.set(tmp, BONES.foreB * 16);
+    }
+    // sleeve + upper arm: rigid tubes
+    const segTo = (obj: RenderObject, a: Vec3, b: Vec3, up: ArrayLike<number>, unitLen: number) => {
       const d = vec3.sub(vec3.create(), b, a);
       const len = vec3.length(d);
       const dir = vec3.scale(vec3.create(), d, 1 / Math.max(len, 1e-6));
       const m = mat4.fromRotationTranslation(this.tmp, basisQuat(dir, up), a);
-      if (stretch >= 0 && obj !== A.cuff) { const k = len + stretch; m[8] *= k; m[9] *= k; m[10] *= k; }
+      const k = len / unitLen; m[8] *= k; m[9] *= k; m[10] *= k;
       obj.setTransform(m);
     };
-    const handUp = vec3.transformQuat(vec3.create(), [0, 1, 0], mat4.getRotation(quat.create(), hand));
-    segTo(A.cuff, vec3.scaleAndAdd(vec3.create(), wrist, handBack, -0.012), elbow, handUp);
-    segTo(A.fore, vec3.scaleAndAdd(vec3.create(), wrist, handBack, 0.035), elbow, handUp, 0.02);
-    const ue = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), shoulder, elbow));
+    const sleeveUp = vec3.normalize(vec3.create(), vec3.lerp(vec3.create(), handUp, upB, 0.4));
+    segTo(S.sleeve, vec3.scaleAndAdd(vec3.create(), wrist, axis, SLEEVE_START * (foreLen / Lf)), vec3.scaleAndAdd(vec3.create(), elbow, axis, 0.03), sleeveUp, this.sleeveLength);
+    const ued = vec3.normalize(vec3.create(), ue);
     // the upper arm continues past the shoulder joint into the torso (its end is never visible)
-    segTo(A.upper, vec3.scaleAndAdd(vec3.create(), elbow, ue, -0.025), vec3.scaleAndAdd(vec3.create(), shoulder, ue, 0.4), handUp);
+    segTo(S.upper, vec3.scaleAndAdd(vec3.create(), elbow, ued, -0.02), vec3.scaleAndAdd(vec3.create(), shoulder, ued, 0.4), upB, 1);
   }
+}
+
+/** Pushed-up shirt sleeve along −z: rolled cuff, then a loose tube to the elbow (length `len`). */
+function sleeveTube(len: number): Geometry {
+  // [radius, distance from the cuff]; the forearm skin under the cuff is ≈ 38 × 33 mm, the lip rolls inwards
+  const prof: [number, number][] = [
+    [0.039, 0.007], [0.041, 0], [0.0445, 0.003], [0.047, 0.009], [0.0475, 0.017], [0.046, 0.026], [0.044, 0.034],
+    [0.044, len * 0.45], [0.0465, len * 0.8], [0.048, len], [0.040, len + 0.004], [0.0, len + 0.004],
+  ];
+  return lathe(prof, seg(22)).rotateX(-Math.PI / 2).scale(1, 0.88, 1);
 }
 
 /** Two-bone IK: elbow position for upper arm `a` (shoulder→elbow) and forearm `b` (elbow→wrist). */
@@ -274,5 +278,3 @@ export function blendPose(a: HandPose, b: HandPose, t: number): HandPose {
     thumb: { dir: lerp3(a.thumb.dir, b.thumb.dir, t), bend: [a.thumb.bend[0] + (b.thumb.bend[0] - a.thumb.bend[0]) * t, a.thumb.bend[1] + (b.thumb.bend[1] - a.thumb.bend[1]) * t] },
   };
 }
-
-void ({} as Piece);

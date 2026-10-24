@@ -8,11 +8,11 @@ import { TextureCache } from './texture';
 
 export type RecipeKind =
   | 'concrete' | 'wood' | 'anodized' | 'parkerized' | 'polymer' | 'paintedSteel' | 'ground' | 'gravel'
-  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass';
+  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass' | 'nitride' | 'machined' | 'skin';
 
 const KIND_ID: Record<RecipeKind, number> = {
   concrete: 0, wood: 1, anodized: 2, parkerized: 3, polymer: 4, paintedSteel: 5, ground: 6, gravel: 7,
-  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14,
+  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14, nitride: 15, machined: 16, skin: 17,
 };
 
 export interface RecipeParams {
@@ -301,6 +301,65 @@ fn recipe(uv: vec2f) -> S {
       s.rough = mix(0.5 + 0.1 * scale, 0.9, rust);
       s.height = 0.5 + 0.06 * fine + 0.2 * rust * fine;
     }
+    case 15u: { // black nitride (QPQ) steel: smooth semi-gloss black, holster swirl, micro-scratches to bright steel
+      let fine = fbm(uv, 160, 3, seed);
+      let blotch = fbm(uv, 5, 4, seed + 3u);
+      let swirl = abs(gnoise(vec2f(uv.x * 9.0, uv.y * 420.0), vec2i(9, 420), seed + 7u));
+      let sc = scratches(uv, seed + 11u, wear * 1.4);
+      let haze = smoothstep(0.5, 0.8, fbm(uv, 10, 4, seed + 19u) * 0.5 + 0.5) * wear * 0.35;
+      let bare = saturate(sc * 0.9);
+      s.albedo = mix(P.color.rgb * (0.9 + 0.2 * blotch + 0.06 * fine) + vec3f(0.012) * haze, vec3f(0.6, 0.6, 0.62), bare);
+      s.metal = mix(0.85, 1.0, bare);
+      s.rough = mix(select(P.misc.y, 0.34, P.misc.y < 0.0) + 0.06 * fine + 0.05 * blotch + 0.08 * swirl * haze + 0.1 * haze, 0.3, bare);
+      s.height = 0.5 + 0.05 * fine - 0.3 * sc;
+    }
+    case 16u: { // machined stainless / bright steel: turning marks (along U), fine grain, light tarnish
+      let turn = abs(gnoise(vec2f(uv.x * 4.0, uv.y * 900.0), vec2i(4, 900), seed));
+      let turn2 = 0.5 + 0.5 * sin(uv.y * 6.2831853 * 420.0 + 2.0 * gnoise(uv * 3.0, vec2i(3), seed + 2u));
+      let fine = fbm(uv, 128, 3, seed + 5u);
+      let tarn = smoothstep(0.45, 0.85, fbm(uv, 6, 5, seed + 9u) * 0.5 + 0.5) * wear;
+      let sc = scratches(uv, seed + 13u, 0.6);
+      s.albedo = mix(P.color.rgb * (0.92 + 0.1 * fine + 0.05 * turn), P.color.rgb * vec3f(0.78, 0.76, 0.72), tarn);
+      s.metal = 1.0;
+      s.rough = select(P.misc.y, 0.32, P.misc.y < 0.0) + 0.18 * turn * extra + 0.05 * fine + 0.2 * tarn - 0.08 * sc;
+      s.height = 0.5 + 0.12 * turn2 * extra + 0.04 * fine - 0.2 * sc;
+    }
+    case 17u: { // human skin (bare hands / forearm); extra = 1 → fingernail plate
+      let tone = P.color.rgb;
+      if (extra > 0.5) {
+        // nail: keratin plate over the pink nail bed, fine longitudinal ridges, semi-gloss
+        let ridges = gnoise(vec2f(uv.x * 140.0, uv.y * 5.0), vec2i(140, 5), seed + 3u);
+        let fine = fbm(uv, 40, 3, seed + 7u);
+        let bed = fbm(uv, 3, 3, seed + 11u);
+        s.albedo = mix(tone * vec3f(1.08, 0.88, 0.86), vec3f(0.78, 0.62, 0.58), 0.35 + 0.15 * bed) * (0.96 + 0.06 * fine);
+        s.rough = 0.26 + 0.05 * fine + 0.03 * abs(ridges);
+        s.height = 0.5 + 0.04 * ridges + 0.01 * fine;
+      } else {
+        // pigment / blood mottling at three scales (blotches, mid-scale warm/cool patches, fine)
+        let blotch = fbm(uv, 3, 4, seed);
+        let mott = fbm(uv, 9, 3, seed + 11u);
+        let fine = fbm(uv, 90, 3, seed + 29u);
+        // micro-relief: polygonal skin cells separated by furrows (Worley ridges at two scales), pores
+        let cw = worley(uv, 70, seed + 5u);
+        let cw2 = worley(uv, 180, seed + 37u);
+        let cells = smoothstep(0.0, 0.16, cw.y - cw.x);
+        let cells2 = smoothstep(0.0, 0.2, cw2.y - cw2.x);
+        // a few faint primary lines crossing the cell network (irregular, not a grid)
+        let crease = 1.0 - abs(gnoise(vec2f(uv.x * 9.0 + 0.3 * mott, uv.y * 120.0), vec2i(9, 120), seed + 17u));
+        let furrows = smoothstep(0.9, 0.99, crease) * 0.35;
+        let pores = smoothstep(0.08, 0.0, worley(uv, 260, seed + 23u).x);
+        // colour: redder where blood is close to the surface, yellower / greyer elsewhere, darker in furrows
+        var alb = tone * (1.0 + 0.12 * blotch) + vec3f(0.08, -0.01, -0.03) * blotch + vec3f(0.035, 0.02, -0.02) * mott;
+        alb *= 1.0 - 0.06 * (1.0 - cells) - 0.04 * (1.0 - cells2) - 0.08 * furrows - 0.2 * pores + 0.04 * fine;
+        // sparse small freckles
+        let spots = smoothstep(0.7, 0.76, fbm(uv, 60, 2, seed + 31u) * 0.5 + 0.5);
+        alb = mix(alb, tone * 0.7, spots * 0.35);
+        s.albedo = alb;
+        s.rough = 0.5 + 0.1 * (1.0 - cells) + 0.12 * pores + 0.05 * fine - 0.06 * blotch;
+        s.height = 0.5 + 0.09 * cells + 0.05 * cells2 - 0.16 * pores - 0.08 * furrows + 0.03 * fine;
+        s.ao = 1.0 - 0.25 * pores - 0.1 * (1.0 - cells);
+      }
+    }
     default: { // 14 grass (top-down meadow)
       let clump = fbm(uv, 8, 5, seed);
       let blades = abs(gnoise(vec2f(uv.x * 500.0, uv.y * 80.0), vec2i(500, 80), seed + 3u));
@@ -361,6 +420,9 @@ const DEFAULTS: Record<RecipeKind, Required<Omit<RecipeParams, 'size' | 'seed'>>
   cardboard: { tileMeters: 0.6, color: [0.55, 0.4, 0.25], color2: [0, 0, 0], wear: 0, dirt: 0.3, roughness: -1, bumpMm: 0.2, extra: 0 },
   bareSteel: { tileMeters: 0.5, color: [0, 0, 0], color2: [0, 0, 0], wear: 0.3, dirt: 0, roughness: -1, bumpMm: 0.2, extra: 0 },
   grass: { tileMeters: 1.5, color: [0.055, 0.085, 0.022], color2: [0.2, 0.17, 0.085], wear: 0, dirt: 0, roughness: -1, bumpMm: 10, extra: 0 },
+  nitride: { tileMeters: 0.12, color: [0.028, 0.029, 0.032], color2: [0, 0, 0], wear: 0.2, dirt: 0, roughness: -1, bumpMm: 0.015, extra: 0 },
+  machined: { tileMeters: 0.06, color: [0.62, 0.62, 0.63], color2: [0, 0, 0], wear: 0.15, dirt: 0, roughness: -1, bumpMm: 0.01, extra: 1 },
+  skin: { tileMeters: 0.05, color: [0.56, 0.33, 0.24], color2: [0, 0, 0], wear: 0, dirt: 0, roughness: -1, bumpMm: 0.12, extra: 0 },
 };
 
 export class MaterialSynth {
