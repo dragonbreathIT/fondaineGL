@@ -149,4 +149,11 @@ export function registerAudioTuning(tuning: Tuning, v: Vorp) {
   group('Master', MASTER_PARAMS, v.params.master, OP.MASTER);
   group('Reverb', REVERB_PARAMS, v.params.reverb, OP.REVERB);
   group('Ambience', AMBIENCE_PARAMS, v.params.ambience, OP.AMBIENCE);
+  const W = v.shotWet;
+  t.number('Gunshot wet', W, 'recordedSendCutDb', { label: 'Recorded shot reverb cut', min: 0, max: 30, step: 0.5, unit: 'dB', help: 'Field recordings carry their own reverb; this much less send for them' })
+    .number('Gunshot wet', W, 'tailDb', { label: 'Recorded tail layer', min: -40, max: 0, step: 0.5, unit: 'dB', help: 'Level of the distant tail recording under the report (presets can override)' })
+    .number('Gunshot wet', W, 'burstWindowS', { label: 'Burst window', min: 0, max: 1, step: 0.01, unit: 's', help: 'Shots closer than this count as one burst' })
+    .number('Gunshot wet', W, 'burstDuckDb', { label: 'Duck per burst shot', min: 0, max: 12, step: 0.5, unit: 'dB' })
+    .number('Gunshot wet', W, 'burstDuckMaxDb', { label: 'Max burst duck', min: 0, max: 30, step: 0.5, unit: 'dB' })
+    .number('Gunshot wet', W, 'burstChokeMs', { label: 'Burst echo choke', min: 0, max: 2000, step: 10, unit: 'ms', help: 'In a burst, the previous round\'s recorded echo fades out over this long (0 = let every tail ring)' });
 }

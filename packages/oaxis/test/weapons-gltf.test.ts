@@ -45,9 +45,9 @@ function modelBounds(m: FirearmModel) {
 /** Worst phalanx clearance (mm) of a fitted pose against the model; palm reported separately. */
 function worstClearance(pose: HandPose, model: FirearmModel, side: 1 | -1) {
   const c = debugHandClearance(pose, model, side)!;
-  let digits = Infinity;
-  for (const [k, v] of Object.entries(c)) if (/^(f\d\d|t\d)$/.test(k)) digits = Math.min(digits, ...v);
-  return { digits, palm: Math.min(...c.palm) };
+  let digits = Infinity, worstName = "";
+  for (const [k, v] of Object.entries(c)) if (/^(f\d\d|t\d)$/.test(k)) { const m = Math.min(...v); if (m < digits) { digits = m; worstName = k; } }
+  return { digits, worstName, palm: Math.min(...c.palm) };
 }
 
 async function roundTrip(glb: ArrayBuffer, kind: WeaponKind): Promise<GLTFWeapon> {
@@ -82,7 +82,8 @@ function checkModel(tag: string, w: GLTFWeapon, ref: WeaponBuild, expectFlags: (
     for (const [k, side] of [['right', 1], ['left', -1], ['leftOnMagazine', -1]] as const) {
       const r = fit.reports[k];
       const c = worstClearance(fit.grips[k]!, m, side);
-      check(c.digits >= -1.0, `${tag} ${k} fitted: worst phalanx clearance ${c.digits.toFixed(1)} mm, palm ${c.palm.toFixed(1)} mm, ${r.changed} digits moved${r.palmPush ? `, hand pushed ${(r.palmPush * 1000).toFixed(1)} mm` : ''}`);
+      // the thumb root (t0) is the thenar pad: soft tissue that compresses up to ~2 mm against a grip; phalanges get 1 mm
+      check(c.digits >= (c.worstName === 't0' ? -2.0 : -1.0), `${tag} ${k} fitted: worst phalanx clearance ${c.digits.toFixed(1)} mm (${c.worstName}), palm ${c.palm.toFixed(1)} mm, ${r.changed} digits moved${r.palmPush ? `, hand pushed ${(r.palmPush * 1000).toFixed(1)} mm` : ''}`);
     }
   }
 }
@@ -109,6 +110,38 @@ for (const [name, b, kind] of builds) {
   const asset = await parseGLTF(anon.slice(0), '', { decodeImages: false });
   const wk = weaponFromGLTF(renderer, instantiateGLTF(renderer, asset, { keepSource: true }), { autoOrient: true });
   check(wk.kind === kind, `${name} kind inferred from proportions: ${wk.kind}`);
+}
+// A scoped rifle with a bulky muzzle end (suppressor + folded bipod): the case where "the muzzle is the thin end"
+// picks the stock. Orientation must come from the hanging grip/magazine, the sights from the scope's centre line.
+{
+  const { Mesh, RenderObject, Material, cylinder, box } = await import('@fondaine/gl');
+  const b = buildCarbine(renderer);
+  const add = (g: ReturnType<typeof cylinder>) => b.model.parts.push({ object: new RenderObject(new Mesh(renderer.dev, g.computeTangents(), { keepSource: true }), new Material({ name: 'extra' })), local: mat4.create() as never });
+  // 1-6x scope: 30 mm tube centred 32 mm above the rail, eyepiece and objective bells, two rings
+  const railTop = 0.0307, cy = railTop + 0.032;
+  add(cylinder(0.015, 0.015, 0.26, 32).rotateX(Math.PI / 2).translate(0, cy, 0.03));
+  add(cylinder(0.021, 0.021, 0.05, 32).rotateX(Math.PI / 2).translate(0, cy, 0.17));
+  add(cylinder(0.024, 0.024, 0.06, 32).rotateX(Math.PI / 2).translate(0, cy, -0.12));
+  add(box(0.03, 0.02, 0.02).translate(0, railTop + 0.01, 0.08));
+  add(box(0.03, 0.02, 0.02).translate(0, railTop + 0.01, -0.04));
+  // suppressor (Ø44 mm, 0.17 m) on the muzzle and a folded bipod under the handguard front
+  const mz = b.model.muzzle[2];
+  add(cylinder(0.022, 0.022, 0.17, 32).rotateX(Math.PI / 2).translate(0, 0, mz - 0.07));
+  add(box(0.05, 0.05, 0.16).translate(0, -0.05, -0.38));
+  const anon = exportVariant(b, false, raw as Float32Array);
+  if (writeDir) writeFileSync(join(writeDir, 'carbine-scoped-raw.glb'), Buffer.from(anon));
+  const w = await roundTrip(anon, 'carbine');
+  const m = w.model;
+  const bb = modelBounds(m);
+  const ub = modelBounds(b.model);
+  check(Math.abs((bb.max[2] - bb.min[2]) - (ub.max[2] - ub.min[2])) < 0.01, `scoped carbine: real length kept (${(bb.max[2] - bb.min[2]).toFixed(3)} m, source ${(ub.max[2] - ub.min[2]).toFixed(3)} m in cm units)`);
+  const mzFront = m.muzzle[2] < (bb.min[2] + bb.max[2]) / 2;
+  check(mzFront, `scoped carbine: muzzle at the front (−z) end, muzzle z ${m.muzzle[2].toFixed(3)} vs bounds ${bb.min[2].toFixed(3)}…${bb.max[2].toFixed(3)}`);
+  const ry = m.rearSight[1] - m.muzzle[1];
+  check(Math.abs(ry - cy) < 0.006, `scoped carbine: rear sight on the scope's centre line (${(ry * 1000).toFixed(0)} mm above the bore, scope centre ${((cy) * 1000).toFixed(0)} mm)`);
+  const fy = m.frontSight[1] - m.muzzle[1];
+  check(Math.abs(fy - cy) < 0.006, `scoped carbine: front sight on the scope's centre line (${(fy * 1000).toFixed(0)} mm)`);
+  check(m.frontSight[2] < m.rearSight[2], `scoped carbine: front sight ahead of the rear sight`);
 }
 if (writeDir) console.log(`wrote glb files to ${writeDir}`);
 if (fail) throw new Error(`${fail} scanned-weapon checks failed`);

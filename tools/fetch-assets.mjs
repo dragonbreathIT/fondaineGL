@@ -493,12 +493,12 @@ async function weapons() {
   }
   for (const { slot, set, pick } of picks) {
     try {
-      const hints = { weapon: { kind: set.kind, autoOrient: true, lengthM: set.lengthM } };
+      const hints = { weapon: { kind: set.kind, autoOrient: true, nominalLengthM: set.lengthM } };
       await sketchfabGet(pick.uid, slot, { tris: Number(flag('tris', 300000)), perNode: true, hints, maxTex: Number(flag('maxtex', 2048)) });
       const mf = weaponMappingFile(slot);
       if (!existsSync(mf)) {
         mkdirSync(dirname(mf), { recursive: true });
-        writeFileSync(mf, JSON.stringify({ kind: set.kind, autoOrient: true, lengthM: set.lengthM }, null, 2));
+        writeFileSync(mf, JSON.stringify({ kind: set.kind, autoOrient: true, nominalLengthM: set.lengthM }, null, 2));
         log(`  mapping overrides: ${relative(root, mf)} (part regexes, sockets, grips, forward/up — see README → Scanned weapons)`);
       }
     } catch (e) { log(`  ✗ ${slot}: ${e.message}`); process.exitCode = 1; }
