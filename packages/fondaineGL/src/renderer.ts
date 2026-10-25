@@ -4,7 +4,7 @@
 
 import { FGLDevice, UniformWriter, mipCount } from './device';
 import { FRAME_BYTES, LIGHT_BYTES, MAX_LIGHTS } from './shaders/common';
-import { MESH_WGSL, OBJECT_BYTES, SHADOW_WGSL } from './shaders/mesh';
+import { MESH_WGSL, OBJECT_BYTES, SHADOW_WGSL, meshWGSL, shadowWGSL } from './shaders/mesh';
 import {
   AO_BLUR_WGSL, BLOOM_DOWN_WGSL, BLOOM_UP_WGSL, COMPOSITE_WGSL, EXPOSURE_WGSL, GTAO_WGSL, HISTOGRAM_WGSL,
   MOTION_BLUR_WGSL, SKY_PASS_WGSL, TAA_WGSL,
@@ -16,6 +16,7 @@ import { Material } from './material';
 import { TextureCache } from './texture';
 import { MaterialSynth } from './procedural';
 import { Sky } from './sky';
+import { Wind } from './wind';
 import { IBL } from './ibl';
 import { computeCascades, defaultShadows, ShadowSettings } from './shadows';
 import { Camera, RenderObject, Scene } from './scene';
@@ -49,10 +50,6 @@ export interface RenderSettings {
   ibl: { intensity: number; specularOcclusion: number; occludedAmbient: number; groundBounce: number; /** Ambient multiplier on first-person (viewmodel) surfaces: the eye adapts to what it holds, and dark gear in roof shadow would otherwise read black. 1 = physical. */ viewmodelFill: number };
   /** Baked GI probe volume. */
   gi: { enabled: boolean; intensity: number };
-  /** Procedural cloud deck (visible clouds + matching drifting cloud shadows). */
-  clouds: { enabled: boolean; coverage: number; density: number; altitude: number; scale: number; windSpeed: number; windDirDeg: number; shadowStrength: number };
-  /** Wind for foliage (m/s along the horizontal unit direction [x, z]). */
-  wind: { direction: [number, number]; speed: number; bend: number; turbulence: number };
   shadows: ShadowSettings;
   viewmodelDepthSqueeze: number;
   /** 0 off, 1 normals, 2 AO, 3 velocity, 4 depth, 5 luminance false colour (cd/m²), 6 sky visibility */
@@ -75,8 +72,6 @@ export function defaultRenderSettings(): RenderSettings {
     fog: { density: 0.00035, heightFalloff: 0.045, baseHeight: 0, startDistance: 15, inscatter: 1, mieG: 0.72 },
     ibl: { intensity: 1, specularOcclusion: 1, occludedAmbient: 0.15, groundBounce: 0.6, viewmodelFill: 1.7 },
     gi: { enabled: true, intensity: 1 },
-    wind: { direction: [0.94, 0.35], speed: 1.7, bend: 0.045, turbulence: 0.25 },
-    clouds: { enabled: true, coverage: 0.42, density: 1.6, altitude: 1800, scale: 2600, windSpeed: 9, windDirDeg: 25, shadowStrength: 0.88 },
     shadows: { ...defaultShadows },
     viewmodelDepthSqueeze: 0.5,
     debugView: 0,
@@ -115,6 +110,8 @@ export class Renderer {
   readonly textures: TextureCache;
   readonly synth: MaterialSynth;
   readonly sky: Sky;
+  /** Engine-wide wind (foliage, particles, cloud drift, audio hook). Clouds: `sky.clouds`. */
+  readonly wind = new Wind();
   readonly ibl: IBL;
   readonly particles: ParticleSystem;
   readonly decals: DecalSystem;
@@ -125,6 +122,9 @@ export class Renderer {
   private frameLayout: GPUBindGroupLayout;
   private objectLayout: GPUBindGroupLayout;
   private materialLayout: GPUBindGroupLayout;
+  private terrainMaterialLayout: GPUBindGroupLayout;
+  private terrainMeshModule: GPUShaderModule | null = null;
+  private terrainShadowModule: GPUShaderModule | null = null;
   private shadowLayout: GPUBindGroupLayout;
   // buffers
   private frameBuf: GPUBuffer;
@@ -146,7 +146,6 @@ export class Renderer {
   private skyVis: GPUTexture;
   private skyVisParams = { min: [0, 0, 0], cell: 1, size: [1, 1, 1], enabled: false };
   private probes: GPUTexture[] = [];
-  private cloudDrift = [0, 0];
   private probeParams = { min: [0, 0, 0], cell: 1, size: [1, 1, 1], enabled: false };
   private targets: Targets | null = null;
   private linearClamp: GPUSampler;
@@ -209,6 +208,8 @@ export class Renderer {
         { binding: 12, visibility: VF, texture: { viewDimension: '3d' } },
         { binding: 13, visibility: VF, texture: { viewDimension: '3d' } },
         { binding: 14, visibility: VF, texture: { viewDimension: '3d' } },
+        { binding: 15, visibility: VF, texture: {} },
+        { binding: 16, visibility: VF, texture: {} },
       ],
     });
     this.objectLayout = d.createBindGroupLayout({
@@ -227,6 +228,18 @@ export class Renderer {
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+      ],
+    });
+    // terrain materials bind their three maps as 2D arrays (one layer per terrain layer)
+    this.terrainMaterialLayout = d.createBindGroupLayout({
+      label: 'material-terrain',
+      entries: [
+        { binding: 0, visibility: VF, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },
       ],
     });
@@ -290,6 +303,8 @@ export class Renderer {
 
   /** Assign the material layout to a new material (bind group creation). */
   get materialBindGroupLayout() { return this.materialLayout; }
+  /** Bind group layout for a given material (terrain materials use the 2D-array variant). */
+  materialLayoutFor(mat: Material): GPUBindGroupLayout { return mat.terrain ? this.terrainMaterialLayout : this.materialLayout; }
 
   // ------------------------------------------------------------------------------------------- resources
   private ensureObjectCapacity(n: number): GPUBuffer {
@@ -366,7 +381,7 @@ export class Renderer {
     const d = this.device;
     const enc = d.createCommandEncoder({ label: 'sky-sh-readback' });
     this.sky.update(enc);
-    if (this.sky.version !== this.lastSkyVersion) { this.ibl.update(this.sky.cube, enc); this.lastSkyVersion = this.sky.version; }
+    if (this.sky.envVersion !== this.lastSkyVersion) { this.ibl.update(this.sky.envCube, enc); this.lastSkyVersion = this.sky.envVersion; }
     const rb = d.createBuffer({ size: 144, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, label: 'sh-readback' });
     enc.copyBufferToBuffer(this.ibl.sh, 0, rb, 0, 144);
     d.queue.submit([enc.finish()]);
@@ -422,7 +437,7 @@ export class Renderer {
   }
 
   private getFrameBG(t: Targets): GPUBindGroup {
-    const key = `${t.w}x${t.h}`;
+    const key = `${t.w}x${t.h}|${this.sky.clouds.resourceVersion}`;
     if (this.frameBG && this.frameBGKey === key) return this.frameBG;
     this.frameBG = this.device.createBindGroup({
       layout: this.frameLayout,
@@ -443,6 +458,8 @@ export class Renderer {
         { binding: 12, resource: this.probes[0].createView() },
         { binding: 13, resource: this.probes[1].createView() },
         { binding: 14, resource: this.probes[2].createView() },
+        { binding: 15, resource: this.sky.clouds.shadow.createView() },
+        { binding: 16, resource: this.sky.clouds.dome.createView() },
       ],
     });
     this.frameBGKey = key;
@@ -455,26 +472,34 @@ export class Renderer {
     let p = this.pipelines.get(key);
     if (p) return p;
     const d = this.device;
-    const layout = d.createPipelineLayout({ bindGroupLayouts: [this.frameLayout, this.objectLayout, this.materialLayout] });
+    const matLayout = this.materialLayoutFor(mat);
+    let meshModule = this.meshModule, shadowModule = this.shadowModule;
+    if (mat.terrain) {
+      // compiled lazily: most scenes never draw terrain
+      this.terrainMeshModule ??= this.dev.shader(meshWGSL(true), 'mesh-terrain');
+      this.terrainShadowModule ??= this.dev.shader(shadowWGSL(true), 'shadow-terrain');
+      meshModule = this.terrainMeshModule; shadowModule = this.terrainShadowModule;
+    }
+    const layout = d.createPipelineLayout({ bindGroupLayouts: [this.frameLayout, this.objectLayout, matLayout] });
     const buffers = skinned ? [VERTEX_LAYOUT, SKIN_LAYOUT] : [VERTEX_LAYOUT];
-    const vertex = { module: this.meshModule, entryPoint: skinned ? 'vsSkinned' : 'vsStatic', buffers };
+    const vertex = { module: meshModule, entryPoint: skinned ? 'vsSkinned' : 'vsStatic', buffers };
     const cullMode: GPUCullMode = mat.doubleSided ? 'none' : 'back';
     const prepass = d.createRenderPipeline({
       label: `prepass ${key}`, layout, vertex,
-      fragment: { module: this.meshModule, entryPoint: 'fsPrepass', targets: [{ format: 'rgba16float' }, { format: 'rg16float' }] },
+      fragment: { module: meshModule, entryPoint: 'fsPrepass', targets: [{ format: 'rgba16float' }, { format: 'rg16float' }] },
       primitive: { topology: 'triangle-list', cullMode },
       depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'greater' },
     });
     const main = d.createRenderPipeline({
       label: `main ${key}`, layout, vertex,
-      fragment: { module: this.meshModule, entryPoint: 'fsMain', targets: [{ format: 'rgba16float' }] },
+      fragment: { module: meshModule, entryPoint: 'fsMain', targets: [{ format: 'rgba16float' }] },
       primitive: { topology: 'triangle-list', cullMode },
       depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'equal' },
     });
     const transparent = d.createRenderPipeline({
       label: `transparent ${key}`, layout, vertex,
       fragment: {
-        module: this.meshModule, entryPoint: 'fsTransparent',
+        module: meshModule, entryPoint: 'fsTransparent',
         targets: [{ format: 'rgba16float', blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } }],
       },
       primitive: { topology: 'triangle-list', cullMode },
@@ -483,9 +508,9 @@ export class Renderer {
     const s = this.settings.shadows;
     const shadow = d.createRenderPipeline({
       label: `shadow ${key}`,
-      layout: d.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout, this.objectLayout, this.materialLayout] }),
-      vertex: { module: this.shadowModule, entryPoint: skinned ? 'vsShadowSkinned' : 'vsShadow', buffers },
-      fragment: mat.alphaMode === 'mask' ? { module: this.shadowModule, entryPoint: 'fsShadowMask', targets: [] } : undefined,
+      layout: d.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout, this.objectLayout, matLayout] }),
+      vertex: { module: shadowModule, entryPoint: skinned ? 'vsShadowSkinned' : 'vsShadow', buffers },
+      fragment: mat.alphaMode === 'mask' ? { module: shadowModule, entryPoint: 'fsShadowMask', targets: [] } : undefined,
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 1, depthBiasSlopeScale: s.slopeBias, depthBiasClamp: 0.01 },
     });
@@ -518,11 +543,15 @@ export class Renderer {
     this.time += dt;
     const encoder = d.createCommandEncoder({ label: 'frame' });
 
-    // ---- environment
-    this.sky.update(encoder);
-    if (this.sky.version !== this.lastSkyVersion) {
-      this.ibl.update(this.sky.cube, encoder);
-      this.lastSkyVersion = this.sky.version;
+    // ---- wind → foliage / particles / clouds
+    this.wind.update(dt);
+    this.particles.wind.set(this.wind.vector);
+    // ---- environment: atmosphere + volumetric clouds → env cube → IBL
+    const windAloft = this.wind.aloft(this.sky.clouds.settings.altitude);
+    this.sky.update(encoder, { camPos: camera.position, dt, windAloft: [windAloft[0], windAloft[2]] });
+    if (this.sky.envVersion !== this.lastSkyVersion) {
+      this.ibl.update(this.sky.envCube, encoder);
+      this.lastSkyVersion = this.sky.envVersion;
     }
 
     // ---- camera matrices
@@ -597,12 +626,11 @@ export class Renderer {
     F.vec4(1200, S.viewmodelDepthSqueeze, 0, 0, 0);
     F.vec4(1232, sh.constantBias, sh.slopeBias, Math.min(16, sh.blockerSamples), Math.min(32, sh.pcfSamples));
     F.vec4(1248, S.ibl.occludedAmbient, S.ibl.groundBounce, S.ibl.viewmodelFill, 0);
-    F.vec4(1264, S.wind.direction[0] * S.wind.speed, S.wind.direction[1] * S.wind.speed, S.wind.bend, S.wind.turbulence);
-    const C = S.clouds;
-    this.cloudDrift[0] += Math.cos(C.windDirDeg * Math.PI / 180) * C.windSpeed * dt;
-    this.cloudDrift[1] += Math.sin(C.windDirDeg * Math.PI / 180) * C.windSpeed * dt;
-    F.vec4(1312, C.coverage, C.density, C.altitude, C.scale);
-    F.vec4(1328, this.cloudDrift[0] % 1e6, this.cloudDrift[1] % 1e6, C.shadowStrength, C.enabled ? 1 : 0);
+    const W = this.wind;
+    F.vec4(1264, W.vector[0], W.vector[2], W.settings.foliageBend, W.settings.turbulence);
+    const C = this.sky.clouds.frameParams();
+    F.vec4(1312, C[0], C[1], C[2], C[3]);
+    F.vec4(1328, C[4], C[5], C[6], C[7]);
     const pp = this.probeParams;
     F.vec4(1280, pp.min[0], pp.min[1], pp.min[2], pp.cell);
     F.vec4(1296, pp.size[0], pp.size[1], pp.size[2], pp.enabled && S.gi.enabled ? S.gi.intensity : 0);
@@ -643,7 +671,7 @@ export class Renderer {
     const objBG = (o: RenderObject) => (o._skin ? this.skinBG(o) : o._inst ? this.instBG(o) : this.staticObjectBG);
     const drawMesh = (pass: GPURenderPassEncoder, o: RenderObject) => {
       pass.setBindGroup(1, objBG(o), [slot.get(o)! * OBJECT_BYTES]);
-      pass.setBindGroup(2, o.material.getBindGroup(this.dev, this.textures, this.materialLayout));
+      pass.setBindGroup(2, o.material.getBindGroup(this.dev, this.textures, this.materialLayoutFor(o.material)));
       pass.setVertexBuffer(0, o.mesh.vertexBuffer);
       if (o.mesh.skinBuffer && o._skin) pass.setVertexBuffer(1, o.mesh.skinBuffer);
       pass.setIndexBuffer(o.mesh.indexBuffer, 'uint32');

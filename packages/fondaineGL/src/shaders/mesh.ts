@@ -1,7 +1,7 @@
 // Opaque / transparent / shadow mesh shaders. Forward shading after a depth+normal+velocity prepass.
 
 import { WGSL_ATMOS, WGSL_BRDF, WGSL_CLOUDS, WGSL_CONSTANTS, WGSL_FRAME, WGSL_SHADOW, WGSL_SKYVIS, WGSL_UTIL } from './common';
-import { WGSL_MATERIAL } from '../material';
+import { wgslMaterial } from '../material';
 
 export const OBJECT_BYTES = 256;
 
@@ -72,7 +72,12 @@ fn finishVertex(localPos: vec3f, prevLocalPos: vec3f, n: vec3f, t: vec4f, uv: ve
 }
 `;
 
-export const MESH_WGSL = WGSL_CONSTANTS + WGSL_FRAME + WGSL_UTIL + WGSL_BRDF + WGSL_SHADOW + WGSL_ATMOS + WGSL_SKYVIS + WGSL_CLOUDS + WGSL_OBJECT + WGSL_MATERIAL + VERTEX_IO + /* wgsl */ `
+/**
+ * Mesh shader source. `terrain` selects the variant whose material textures are 2D arrays blended per pixel
+ * from vertex layer weights (see MATERIAL_FLAGS.TERRAIN); everything else is shared.
+ */
+export function meshWGSL(terrain = false): string {
+  return WGSL_CONSTANTS + WGSL_FRAME + WGSL_UTIL + WGSL_BRDF + WGSL_SHADOW + WGSL_ATMOS + WGSL_SKYVIS + WGSL_CLOUDS + WGSL_OBJECT + wgslMaterial(terrain) + VERTEX_IO + /* wgsl */ `
 // Vegetation wind: travelling gust waves along the wind direction + per-blade flutter, bending ∝ height².
 // frame.extra2 = (wind x, wind z, bend per m/s at the tip, turbulence).
 fn windOffset(wp: vec3f, h: f32, t: f32) -> vec3f {
@@ -130,7 +135,7 @@ struct PrepassOut {
 
 fn alphaTest(uv: vec2f) {
   if ((materialFlags() & 1u) != 0u) {
-    let a = textureSample(baseColorTex, matSampler, uv).a * material.baseColor.a;
+    let a = sampleBase(uv, 0).a * material.baseColor.a;
     if (a < material.params.x) { discard; }
   }
 }
@@ -140,7 +145,13 @@ fn alphaTest(uv: vec2f) {
   alphaTest(uv);
   var o: PrepassOut;
   let ng = select(-normalize(i.nrm), normalize(i.nrm), ff);
-  let rough = material.pbr.y * textureSample(ormTex, matSampler, uv).g;
+  var rough = material.pbr.y;
+  if (MATERIAL_IS_TERRAIN) {
+    let w = vec3f(saturate(1.0 - i.uv.x - i.uv.y), saturate(i.uv.x), saturate(i.uv.y));
+    rough *= sampleOrm(uv * material.layers.x, 0).g * w.x + sampleOrm(uv * material.layers.y, 1).g * w.y + sampleOrm(uv * material.layers.z, 2).g * w.z;
+  } else {
+    rough *= sampleOrm(uv, 0).g;
+  }
   o.normal = vec4f(ng, rough);
   let a = i.clipCur.xy / i.clipCur.w;
   let b = i.clipPrev.xy / i.clipPrev.w;
@@ -161,26 +172,103 @@ struct ShadeIn {
   fragCoord: vec2f,
 };
 
+// ---- terrain: three material layers blended per pixel
+// Vertex weights (uv.x = layer 1, uv.y = layer 2, layer 0 = remainder) are perturbed by world-space noise
+// where layers meet and sharpened by each layer's own relief (brightness as a height proxy), so stones and
+// grass blades poke through the neighbouring layer instead of cross-fading.
+fn tnHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn tnValue(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let a = tnHash(i); let b = tnHash(i + vec2f(1.0, 0.0)); let c = tnHash(i + vec2f(0.0, 1.0)); let d = tnHash(i + vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+fn terrainNoise(p: vec2f) -> f32 { return 0.65 * tnValue(p) + 0.35 * tnValue(p * 2.7 + vec2f(3.1, 7.9)); }
+/// Vertex layer weights → per-pixel weights (noise near transitions only, never inside a pure region).
+fn terrainWeights(uvIn: vec2f, wp: vec3f) -> vec3f {
+  var w = vec3f(saturate(1.0 - uvIn.x - uvIn.y), saturate(uvIn.x), saturate(uvIn.y));
+  let mixed = saturate(3.0 * (1.0 - max(w.x, max(w.y, w.z))));
+  if (mixed > 0.0) {
+    let sc = max(material.layers2.x, 0.05);
+    let n1 = terrainNoise(wp.xz / sc);
+    let n2 = terrainNoise(wp.xz / (sc * 0.43) + vec2f(11.3, -5.7));
+    let k = material.layers2.y * mixed;
+    w += vec3f(-n1 - 0.5 * n2, n1 - 0.5 * n2, n2) * k;
+    w = max(w, vec3f(0.0));
+    w /= max(w.x + w.y + w.z, 1e-4);
+  }
+  return w;
+}
+struct TerrainSample { base: vec4f, nrm: vec3f, orm: vec4f };
+fn sampleTerrain(uv: vec2f, uvIn: vec2f, wp: vec3f) -> TerrainSample {
+  let w = terrainWeights(uvIn, wp);
+  let scales = material.layers.xyz;
+  var base: array<vec4f, 3>;
+  var lum = vec3f(0.0);
+  let macroV = sampleBase(uv * 0.021 + vec2f(0.11, 0.29), 1).g;
+  let macroK = mix(0.84, 1.16, saturate(macroV * 2.5));
+  for (var l = 0; l < 3; l++) {
+    let uvl = uv * scales[l];
+    var b = sampleBase(uvl, l);
+    // hide tiling: a second rotated/scaled sample of the same layer
+    let uv2 = vec2f(uvl.x * 0.31 - uvl.y * 0.17, uvl.x * 0.17 + uvl.y * 0.31) + vec2f(0.37, 0.71);
+    let b2 = sampleBase(uv2, l);
+    b = vec4f(mix(b.rgb, b2.rgb, 0.45) * macroK, b.a);
+    base[l] = b;
+    lum[l] = dot(b.rgb, vec3f(0.3, 0.59, 0.11));
+  }
+  // height-based sharpening: brighter (higher) relief wins near a transition
+  let k = material.layers.w;
+  let h = lum * k * 0.55;
+  let b = w + h;
+  let mx = max(b.x, max(b.y, b.z));
+  let depth = mix(0.6, 0.12, k);
+  var ws = max(b - mx + vec3f(depth), vec3f(0.0)) * select(vec3f(0.0), vec3f(1.0), w > vec3f(0.002));
+  ws /= max(ws.x + ws.y + ws.z, 1e-4);
+  var o: TerrainSample;
+  o.base = base[0] * ws.x + base[1] * ws.y + base[2] * ws.z;
+  var n = vec3f(0.0);
+  var orm = vec4f(0.0);
+  for (var l = 0; l < 3; l++) {
+    // sampled unconditionally: textureSample needs uniform control flow
+    let uvl = uv * scales[l];
+    n += (sampleNormalMap(uvl, l).xyz * 2.0 - 1.0) * ws[l];
+    orm += sampleOrm(uvl, l) * ws[l];
+  }
+  o.nrm = normalize(vec3f(n.xy, max(n.z, 0.05)));
+  o.orm = orm;
+  return o;
+}
+
 fn surfaceFromInputs(i: VOut, ff: bool) -> ShadeIn {
   let uv = materialUV(i.uv, i.worldPos);
   var s: ShadeIn;
   s.worldPos = i.worldPos;
-  s.base = textureSample(baseColorTex, matSampler, uv) * material.baseColor;
-  if ((materialFlags() & 4u) != 0u) {
-    // large surfaces: blend a second, rotated & scaled sample and a macro brightness variation to hide tiling
-    let uv2 = vec2f(uv.x * 0.31 - uv.y * 0.17, uv.x * 0.17 + uv.y * 0.31) + vec2f(0.37, 0.71);
-    let b2 = textureSample(baseColorTex, matSampler, uv2) * material.baseColor;
-    let macroV = textureSample(baseColorTex, matSampler, uv * 0.043 + vec2f(0.11, 0.29)).g;
-    s.base = vec4f(mix(s.base.rgb, b2.rgb, 0.45) * mix(0.8, 1.2, saturate(macroV * 2.5)), s.base.a);
+  var orm: vec4f;
+  var nt: vec3f;
+  if (MATERIAL_IS_TERRAIN) {
+    let ts = sampleTerrain(uv, i.uv, i.worldPos);
+    s.base = ts.base * material.baseColor;
+    orm = ts.orm;
+    nt = ts.nrm;
+  } else {
+    s.base = sampleBase(uv, 0) * material.baseColor;
+    if ((materialFlags() & 4u) != 0u) {
+      // large surfaces: blend a second, rotated & scaled sample and a macro brightness variation to hide tiling
+      let uv2 = vec2f(uv.x * 0.31 - uv.y * 0.17, uv.x * 0.17 + uv.y * 0.31) + vec2f(0.37, 0.71);
+      let b2 = sampleBase(uv2, 0) * material.baseColor;
+      let macroV = sampleBase(uv * 0.043 + vec2f(0.11, 0.29), 0).g;
+      s.base = vec4f(mix(s.base.rgb, b2.rgb, 0.45) * mix(0.8, 1.2, saturate(macroV * 2.5)), s.base.a);
+    }
+    orm = sampleOrm(uv, 0);
+    nt = sampleNormalMap(uv, 0).xyz * 2.0 - 1.0;
   }
-  let orm = textureSample(ormTex, matSampler, uv);
   s.metallic = saturate(material.pbr.x * orm.b);
   s.rough = saturate(material.pbr.y * orm.g);
   s.ao = mix(1.0, orm.r, material.pbr.w);
   var ng = normalize(i.nrm);
   if (!ff) { ng = -ng; }
   s.Ng = ng;
-  var nt = textureSample(normalTex, matSampler, uv).xyz * 2.0 - 1.0;
   nt = vec3f(nt.xy * material.pbr.z, nt.z);
   let T0 = i.tan.xyz - ng * dot(ng, i.tan.xyz);
   if (dot(T0, T0) > 1e-8) {
@@ -334,9 +422,13 @@ fn shade(si: ShadeIn) -> vec3f {
   return vec4f(min(c, vec3f(HALF_MAX)) * a, a); // premultiplied
 }
 `;
+}
+
+export const MESH_WGSL = meshWGSL(false);
 
 /** Shadow-map shaders (sun cascades): depth only, alpha-tested variant. */
-export const SHADOW_WGSL = WGSL_OBJECT + WGSL_MATERIAL + /* wgsl */ `
+export function shadowWGSL(terrain = false): string {
+  return WGSL_OBJECT + wgslMaterial(terrain) + /* wgsl */ `
 struct Cascade { viewProj: mat4x4f };
 @group(0) @binding(0) var<uniform> cascade: Cascade;
 struct SOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) wp: vec3f };
@@ -361,7 +453,10 @@ struct SOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
 }
 @fragment fn fsShadowMask(i: SOut) {
   let uv = materialUV(i.uv, i.wp);
-  let a = textureSample(baseColorTex, matSampler, uv).a * material.baseColor.a;
+  let a = sampleBase(uv, 0).a * material.baseColor.a;
   if (a < material.params.x) { discard; }
 }
 `;
+}
+
+export const SHADOW_WGSL = shadowWGSL(false);

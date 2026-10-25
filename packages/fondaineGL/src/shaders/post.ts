@@ -34,29 +34,9 @@ export const SKY_PASS_WGSL = WGSL_CONSTANTS + WGSL_FRAME + WGSL_UTIL + WGSL_CLOU
     let edge = 1.0 - smoothstep(angR * 0.97, angR * 1.15, ang);
     L += frame.sunColor.rgb / solidAngle * limb / 0.8 * edge * frame.sunColor.w;
   }
-  // ---- cloud deck: single-scattering-ish lighting (forward silver lining + powder darkening + sky ambient)
-  if (frame.cloud2.w > 0.5 && dir.y > 0.0) {
-    let t = (frame.cloud.z - frame.camPos.y) / dir.y;
-    let p = frame.camPos.xz + dir.xz * t;
-    let d = cloudDensity(p, 6);
-    if (d > 0.001) {
-      let tau = d * frame.cloud.y * (1.0 + 2.0 / max(dir.y, 0.08));   // slant path through the deck
-      let alpha = 1.0 - exp(-tau);
-      // light reaching this part of the cloud: march towards the sun through the deck
-      let sp = p + frame.sunDir.xz / max(frame.sunDir.y, 0.15) * frame.cloud.w * 0.35;
-      let ds = cloudDensity(sp, 4);
-      let selfShadow = exp(-ds * frame.cloud.y * 2.5);
-      let powder = 1.0 - exp(-tau * 2.0);
-      let g = 0.65;
-      let ph = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosA, 1.5) * (0.25 * INV_PI);
-      let sunL = frame.sunColor.rgb * (INV_PI * 0.55 * powder * (0.35 + 0.65 * selfShadow) + ph * 0.8 * selfShadow);
-      let amb = textureSampleLevel(skyCube, linearClamp, vec3f(0.0, 1.0, 0.0), 3.0).rgb * frame.envParams.y * 0.9;
-      var cl = sunL + amb * (0.6 + 0.4 * (1.0 - d));
-      // aerial perspective: distant clouds fade into the sky
-      let fade = exp(-t / 45000.0);
-      L = mix(L, cl, alpha * fade);
-    }
-  }
+  // ---- clouds: ray-marched dome (premultiplied radiance + transmittance), covers the sun disk too
+  let cl = cloudDome(dir);
+  L = L * cl.a + cl.rgb;
   return vec4f(min(L * exposure.current, vec3f(HALF_MAX)), 1.0);
 }
 `;

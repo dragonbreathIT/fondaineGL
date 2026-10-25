@@ -109,7 +109,8 @@ Every knob is in physical or perceptual units, so tuning means matching reality 
   - Multi-bounce AO.
 - **Sky & ambient.**
   - The sky is baked to an HDR cube, then GGX-prefiltered (filtered importance sampling) and projected to L2 spherical harmonics.
-  - **Clouds:** a procedural cumulus deck with forward-scattering silver linings, self-shadowing and aerial fade, and **matching cloud shadows that drift across the ground**.
+  - **Volumetric clouds** (`engine.sky.clouds.settings`, `engine.cloud({ position, size, density, mode: 'volumetric' | 'flat' })`): a planet-curved slab ray-marched with GPU-generated Perlin-Worley / Worley 3D noise, a paintable 2D weather field (coverage, type, flat channel), Beer-Lambert extinction, dual-lobe Henyey-Greenstein, multi-scattering octaves, powder term and sky/ground ambient — rendered into a direction-indexed dome at low resolution (temporally amortised, no reprojection needed) and composited into the environment cube so IBL/SH darken under cloud. **Matching cloud shadows** come from a projected sun-transmittance map. `mode: 'flat'` keeps the old 2D deck; `quality: 'low'` for software WebGPU.
+  - **Wind** (`engine.wind.set({ speed, direction, gustiness })`): one model (mean vector + Perlin gusts with veer + turbulence) feeds foliage bend, smoke/dust drift, cloud drift (stronger, veered aloft) and the vorp ambience bed; `wind.onGust` fires at gust onsets.
   - **Baked global illumination:** at load, Rust path-traces an irradiance-probe grid (L1 SH per probe) against the physics BVH: sky light correctly occluded, sunlight bounced off every surface (per-surface albedo), multiple bounces. The weapon, hands and everything under the roof are lit by it. Tune under *fondaineGL → Global illumination*; rebake with `engine.bakeGlobalIllumination()`.
   - A baked sky-visibility volume still drives specular occlusion.
 - **Vegetation:** geometric grass (individual curved blades, wind-animated on the GPU, translucent to back-light) and treelines of alpha-tested foliage cards with volumetric canopy normals.
@@ -218,6 +219,25 @@ Everything procedural can be replaced by a real scan, slot by slot. `tools/fetch
 **Scale:** instanced LOD (`InstancedLODSet`) draws thousands of scanned trees in a handful of draw calls; shadows use the coarser levels.
 
 Viewer: `examples/viewer/?asset=<slot>` frames any slot on the table; `?rig=1&hands=1&eye=1&pov=1` shows the rigged arms.
+
+### Recorded sounds
+
+The gunshots, handling foley, impacts, footsteps and ambience are synthesized (vorp) so the engine runs with zero files — but recordings sound more real. `tools/fetch-sounds.mjs` downloads licence-clean recordings, converts them (48 kHz mono WAV, leading silence trimmed, peak at −1 dBFS, multi-take files split into one file per shot) and registers them in the `sounds` section of `assets/manifest.json`; vorp plays a loaded slot **through the same chain as the synthesis** (directivity, spreading, air absorption, image-source reflections, hearing model, loudness mapping) with ±1 semitone / ±1 dB variation and never the same take twice in a row, keeping a reduced synth bed underneath (`synthBedDb`, −9 dB: body + sub punch, compacted spike) so the chest punch and the hearing model keep working. A slot that is not loaded falls back to pure synthesis.
+
+| Command | What it does |
+|---|---|
+| `node tools/fetch-sounds.mjs` | default set. Without a token: **CC0 recordings from OpenGameArt** (The Free Firearm Sound Library: AR-15, 9 mm PPQ, 9 mm M45, .30-06, AK-47, 1911 — real shots, near + mid-distance takes; magazine loads, metal/wood hits, footsteps, birds, wind). With `FREESOUND_TOKEN`: also the Freesound set (slide rack, charging handle, bolt release, mag release, dry fire, suppressed shots, bullet cracks, steel plates, casings, footsteps, ambience) |
+| `FREESOUND_TOKEN=… node tools/fetch-sounds.mjs search "ar-15 gunshot" [--license cc0\|by]` | search Freesound (CC0 or CC-BY only) |
+| `node tools/fetch-sounds.mjs get <freesoundId> --slot shot.rifle556 [--split shots]` | one Freesound sound into a slot (HQ OGG preview; originals would need OAuth) |
+| `node tools/fetch-sounds.mjs oga <page-slug> --slot <slot> [--file <regex>] [--inner <regex>] [--split shots]` | an OpenGameArt page (licence read from the page) |
+| `node tools/fetch-sounds.mjs local shot.wav --slot shot.rifle556 --license CC0 --author … --url …` | a recording you own |
+| `node tools/fetch-sounds.mjs list \| credits \| clean` | registered sounds / rewrite `assets/CREDITS.md` / remove them |
+
+**Licences:** only CC0 and CC-BY are accepted, read from the source itself (Freesound's `license` field, the licence block of the OpenGameArt page) at download time and recorded per file (title, author, licence, URL, source id) in the manifest and in `assets/CREDITS.md`. If nothing can be verified the tool writes nothing. CC-BY recordings must be credited when you ship (the range overlay lists them with the scanned assets). Nothing under `assets/` is committed.
+
+**Token:** `FREESOUND_TOKEN` is a free Freesound account's API key (freesound.org → your profile → *API credentials*). It downloads the 128 kbps OGG previews, which is plenty for a shot through the vorp chain.
+
+**Slots** are families: `shot.rifle556` means `shot.rifle556.01`, `.02`, … and one is picked per shot. Presets name their slots (`GUNSHOTS[*].samples`: `shot` / `shotTail` / `auto` / `suppressed`; `MECH[*].sample`), impacts use `impact.<material>`, footsteps `step.<surface>`, ambience beds `amb.birds` / `amb.wind`. Per-file `gainDb` / `trimMs` in the manifest are applied at load. Load them in a game with `engine.audio.loadSoundAssets('../../assets/manifest.json')` (files are fetched immediately, decoded when audio starts on the first click). `ffmpeg` on the PATH converts any format; without it WAV sources still convert and OGG/MP3 are kept for the browser to decode. The Free Firearm Sound Library is a 194 MB `.7z`: have `7z` on the PATH or `pip install py7zr`.
 
 ---
 

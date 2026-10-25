@@ -3,8 +3,12 @@
 // Checks the loudness contract of the shooter's own shot (see docs/vorp-reference/README.md):
 //   peak ≥ −0.5 dBFS, first 50 ms RMS ≥ −8 dBFS, every burst onset within 1.5 dB of the first,
 //   mechanical handling peaks ≥ 10 dB under full scale, and the hearing model reacting (TTS, tinnitus after a burst).
+// Then the recorded-sample layer: a synthetic "recording" registered under a slot plays through the same chain at the
+// preset level (full-scale peak, hearing model driven), the level contract of `sampleAt` holds (peak SPL → dBFS via the
+// calibration), slot families pick numbered takes only, and a preset whose slots are not loaded renders exactly the
+// pure synthesis.
 import { readFileSync } from 'node:fs';
-import { VorpOffline, GUNSHOTS, ZONES, METER } from '../src/index';
+import { VorpOffline, GUNSHOTS, ZONES, METER, GunshotPreset } from '../src/index';
 
 const bytes = readFileSync('wasm/vorp_dsp.wasm');
 const wasm = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -64,4 +68,82 @@ for (const sr of [44100, 48000]) {
   const m3 = off3.meters();
   check(m3[METER.MAX_EAR_SPL] < m[METER.MAX_EAR_SPL] - 15, `passive muffs cut the eardrum peak by > 15 dB (${m3[METER.MAX_EAR_SPL].toFixed(1)} vs ${m[METER.MAX_EAR_SPL].toFixed(1)} dB SPL)`);
 }
+// --- recorded-sample layer (48 kHz)
+{
+  const sr = 48000;
+  /** A 0.4 s decaying noise burst (deterministic LCG) normalised to −1 dBFS: stands in for a downloaded shot. */
+  const burst = (seed: number, seconds = 0.4) => {
+    const n = Math.round(seconds * sr), d = new Float32Array(n);
+    let x = seed >>> 0;
+    for (let i = 0; i < n; i++) { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; d[i] = ((x / 4294967296) * 2 - 1) * Math.exp(-i / (0.06 * sr)); }
+    let p = 0; for (const v of d) p = Math.max(p, Math.abs(v));
+    const g = Math.pow(10, -1 / 20) / p;
+    for (let i = 0; i < n; i++) d[i] *= g;
+    return d;
+  };
+  const setup = async () => {
+    const v = await VorpOffline.create(wasm, sr);
+    v.random = () => 0.42;
+    v.setZone(ZONES.coveredRange);
+    v.setListener(EYES, [0, 0, -1], [0, 1, 0]);
+    return v;
+  };
+  // registration + families
+  const off = await setup();
+  off.registerSample('shot.test.01', burst(1), sr);
+  off.registerSample('shot.test.02', burst(2, (0.4 * 44100) / sr), 44100); // a 44.1 kHz take: resampled to the engine rate
+  off.registerSample('shot.test.mid.01', burst(3, 0.8), sr);
+  const fam = off.samplesFor('shot.test');
+  check(fam.length === 2 && fam.every((s) => Math.abs(db(s.peak) + 1) < 0.2), `slot family = numbered takes only (${fam.map((s) => s.slot).join(', ')}), peaks −1 dBFS`);
+  check(Math.abs(fam[1].frames - 0.4 * sr) < 3, `44.1 kHz take resampled to the engine rate (${fam[1].frames} frames)`);
+  // a recorded shot through the full chain
+  const preset: GunshotPreset = { ...GUNSHOTS.rifle556_16in, name: 'test', samples: { shot: ['shot.test'], shotTail: ['shot.test.mid'] } };
+  const r = off.gunshot(preset, MUZZLE, [0, 0, -1], PORT, { seed: 1 }, { delayMs: 50 });
+  check(r.samples.length === 2 && r.blast.id !== r.samples[0].id, `recorded report + tail layers spawned, synth bed kept (${r.samples.length} layers)`);
+  const out = off.render(1.2);
+  const pk = db(peakOf(out.left, out.right, 0, out.left.length));
+  const mm = off.meters();
+  console.log(`recorded shot: peak ${pk.toFixed(1)} dBFS, max eardrum ${mm[METER.MAX_EAR_SPL].toFixed(1)} dB SPL, TTS ${mm[METER.TTS].toFixed(1)} dB`);
+  check(pk >= -0.5, `recorded shot peaks at full scale (${pk.toFixed(2)} dBFS)`);
+  check(mm[METER.MAX_EAR_SPL] > 140 && mm[METER.TTS] > 1, `recorded shot drives the hearing model (${mm[METER.MAX_EAR_SPL].toFixed(0)} dB SPL at the eardrum)`);
+  // never the same take twice in a row
+  const picks = new Set<number>();
+  let repeats = 0, last = r.take!.id;
+  for (let i = 0; i < 6; i++) { off.random = () => (i % 3) / 3; const g = off.gunshot(preset, MUZZLE, [0, 0, -1], null, { seed: i }); picks.add(g.take!.id); if (g.take!.id === last) repeats++; last = g.take!.id; }
+  check(picks.size === 2 && repeats === 0, `random pick uses both takes and never repeats one (${picks.size} distinct, ${repeats} repeats)`);
+  // bed off → the recording is the blast voice
+  const off2 = await setup();
+  off2.registerSample('shot.test.01', burst(1), sr);
+  const r2 = off2.gunshot({ ...preset, synthBedDb: -200 }, MUZZLE, [0, 0, -1], null);
+  check(r2.samples.length === 1 && r2.blast.id === r2.samples[0].id, 'synthBedDb ≤ −90 drops the synth bed');
+  // missing slot → pure synthesis, bit-identical to a preset without samples
+  const a = await setup(), b = await setup();
+  const ra = a.gunshot({ ...GUNSHOTS.rifle556_16in, samples: { shot: ['shot.missing'], shotTail: ['shot.missing.mid'] } }, MUZZLE, [0, 0, -1], PORT, { seed: 7 }, { delayMs: 50 });
+  b.gunshot({ ...GUNSHOTS.rifle556_16in, samples: undefined }, MUZZLE, [0, 0, -1], PORT, { seed: 7 }, { delayMs: 50 });
+  const oa = a.render(1.0), ob = b.render(1.0);
+  let same = ra.samples.length === 0;
+  for (let i = 0; same && i < oa.left.length; i++) same = oa.left[i] === ob.left[i] && oa.right[i] === ob.right[i];
+  check(same, 'preset with unloaded slots renders exactly the synthesized shot');
+  // level contract: a full-scale tone at 90 dB SPL, non-positional → 90 − 112 (calibration) = −22 dBFS
+  const c = await VorpOffline.create(wasm, sr);
+  c.random = () => 0.5;
+  c.setAmbience({ enable: 0 });
+  const tone = new Float32Array(Math.round(0.25 * sr));
+  for (let i = 0; i < tone.length; i++) { const f = Math.min(1, i / (0.01 * sr), (tone.length - i) / (0.01 * sr)); tone[i] = Math.sin((2 * Math.PI * 1000 * i) / sr) * f; }
+  c.registerSample('tone', tone, sr);
+  check(c.sampleAt('tone', [0, 0, 0], 90, { spatial: false, reverbSendDb: -90, variation: 0 }) !== null && c.sampleAt('nothing.here', [0, 0, 0], 90) === null, 'sampleAt plays loaded slots and returns null for unknown ones');
+  const oc = c.render(0.5);
+  const tonePk = db(peakOf(oc.left, oc.right, 0, oc.left.length));
+  check(Math.abs(tonePk + 22) < 0.7, `90 dB SPL sample peak reads −22 dBFS after calibration (${tonePk.toFixed(2)})`);
+  // mechanical handling: recording replaces the noise texture when loaded, synthesis otherwise
+  const d = await setup();
+  d.registerSample('mech.magSeat.01', burst(4, 0.15), sr);
+  const rm = d.mech('magSeat', PORT, { delayMs: 20 });
+  const rs = d.mech('slideHome', PORT, { delayMs: 300 });
+  check(rm.recorded && !rs.recorded, 'mech() uses the recording for loaded slots only');
+  const od = d.render(0.8);
+  const mechPk = db(peakOf(od.left, od.right, 0, od.left.length));
+  check(mechPk <= -10 && mechPk >= -40, `recorded handling stays 10–40 dB under full scale (${mechPk.toFixed(1)} dBFS)`);
+}
+
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }

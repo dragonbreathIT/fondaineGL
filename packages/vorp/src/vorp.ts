@@ -2,7 +2,7 @@
 // helpers for every source kind, and an offline renderer (same WASM, no AudioContext) for tools/tests.
 
 import { AMBIENCE_PARAMS, BUS, GUNSHOT_PARAMS, HEARING_PARAMS, KIND, MASTER_PARAMS, METER, NOISE_PARAMS, OP, paramArray, ParamSpec, REVERB_PARAMS, SPAWN } from './params';
-import { BREATH, GunshotPreset, MECH, MechName, MechPreset, ZonePreset, zoneSendDb } from './presets';
+import { BREATH, GunshotPreset, IMPACTS, MECH, MechName, MechPreset, ZonePreset, zoneSendDb } from './presets';
 import { modalParams, Mode, receiverModes } from './acoustics';
 
 export type Vec3Like = ArrayLike<number>;
@@ -34,6 +34,43 @@ export interface SpawnOptions {
   /** Start delay (ms). */
   delayMs?: number;
 }
+
+/** One recorded sound in `assets/manifest.json` → `sounds` (written by `tools/fetch-sounds.mjs`). */
+export interface SoundEntry {
+  /** Relative to the manifest (e.g. `sounds/shot.rifle556.01.wav`). */
+  file: string;
+  license: string;
+  author?: string;
+  title?: string;
+  url?: string;
+  source?: string;
+  /** Source-specific id (Freesound sound id, OpenGameArt slug). */
+  id?: number | string;
+  /** Level trim applied at playback (dB). */
+  gainDb?: number;
+  /** Leading time skipped at playback (ms). */
+  trimMs?: number;
+  durationS?: number;
+  /** Seamless loop (ambience beds). */
+  loop?: boolean;
+}
+export interface SoundManifest { sounds?: Record<string, SoundEntry> }
+
+/** A registered sample buffer (mono, engine rate). */
+export interface SampleInfo {
+  id: number;
+  slot: string;
+  /** Linear peak of the buffer (a −1 dBFS normalised file → 0.89). */
+  peak: number;
+  frames: number;
+  gainDb: number;
+  loop: boolean;
+}
+
+const P_REF = 20e-6;
+const splToPa = (spl: number) => P_REF * Math.pow(10, spl / 20);
+/** Slot families: `shot.rifle556` matches itself and numbered variants `shot.rifle556.01`, not `shot.rifle556.mid`. */
+const inFamily = (slot: string, family: string) => slot === family || (slot.startsWith(family + '.') && /^\d+$/.test(slot.slice(family.length + 1)));
 
 export interface VorpMeters {
   peakL: number; peakR: number; sceneSpl: number; tts: number; compGr: number; limitGr: number; voices: number;
@@ -99,8 +136,82 @@ export abstract class VorpBase {
   protected nextId = 1;
   /** Random seed source (deterministic in tests). */
   random: () => number = Math.random;
+  /** Registered recorded sounds by slot (see `registerSample`, `Vorp.loadSamples`). */
+  readonly samples = new Map<string, SampleInfo>();
+  private lastPick = new Map<string, number>();
+  private nextSampleId = 1;
 
   cmd(op: number, args: ArrayLike<number>) { this.cmdb.push(op, args); }
+
+  /** Engine sample rate (samples are stored at this rate). */
+  protected abstract get engineRate(): number;
+  /** Copies a mono buffer (already at the engine rate) into the DSP sample bank under `id`. */
+  protected abstract uploadSample(id: number, data: Float32Array): void;
+
+  // ------------------------------------------------------------------------------------- samples
+  /**
+   * Registers a mono recording under a manifest slot (resampled here if `sampleRate` differs from the engine).
+   * Slots form families: `shot.rifle556.01`, `.02`, … are picked at random by `sampleAt('shot.rifle556', …)`.
+   */
+  registerSample(slot: string, data: Float32Array, sampleRate: number, o: { gainDb?: number; loop?: boolean; trimMs?: number } = {}): SampleInfo {
+    let d = data;
+    if (o.trimMs && o.trimMs > 0) d = d.subarray(Math.min(d.length, Math.round((o.trimMs / 1000) * sampleRate)));
+    if (Math.abs(sampleRate - this.engineRate) > 0.5) d = resampleLinear(d, sampleRate, this.engineRate);
+    let peak = 0;
+    for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+    const prev = this.samples.get(slot);
+    const id = prev?.id ?? this.nextSampleId++;
+    const info: SampleInfo = { id, slot, peak: Math.max(peak, 1e-6), frames: d.length, gainDb: o.gainDb ?? 0, loop: !!o.loop };
+    this.uploadSample(id, d);
+    this.samples.set(slot, info);
+    return info;
+  }
+
+  /** Loaded samples of one or more slot families, in registration order. */
+  samplesFor(slots: string | string[]): SampleInfo[] {
+    const fams = Array.isArray(slots) ? slots : [slots];
+    const out: SampleInfo[] = [];
+    for (const [slot, info] of this.samples) if (fams.some((f) => inFamily(slot, f))) out.push(info);
+    return out;
+  }
+  hasSample(slots: string | string[]) { return this.samplesFor(slots).length > 0; }
+
+  /** Random pick that never repeats the previous choice for `key` (when there is a choice). */
+  protected pickSample(key: string, pool: SampleInfo[]): SampleInfo {
+    const last = this.lastPick.get(key);
+    let i = Math.min(pool.length - 1, (this.random() * pool.length) | 0);
+    if (pool.length > 1 && pool[i].id === last) i = (i + 1 + Math.min(pool.length - 2, (this.random() * (pool.length - 1)) | 0)) % pool.length;
+    this.lastPick.set(key, pool[i].id);
+    return pool[i];
+  }
+
+  /**
+   * Plays a registered recording so that its peak reads `peakSpl` dB SPL at 1 m (then propagated like every other
+   * source: spreading, directivity, air, reflections, hearing model). `semitones` detunes it.
+   */
+  playSample(info: SampleInfo, pos: Vec3Like, peakSpl: number, o: SpawnOptions & { semitones?: number; loop?: boolean } = {}): VoiceHandle {
+    const gainPa = splToPa(peakSpl + info.gainDb) / info.peak;
+    const rate = Math.pow(2, (o.semitones ?? 0) / 12);
+    return this.sample(info.id, pos, gainPa, { ...o, rate, loop: o.loop ?? info.loop });
+  }
+
+  /**
+   * Picks a recording from the slot family (or families) and plays it with the standard variation (±1 semitone,
+   * ±1 dB, never the same file twice in a row). Returns null when nothing is loaded for the slot — callers fall
+   * back to synthesis.
+   */
+  sampleAt(slots: string | string[], pos: Vec3Like, peakSpl: number, o: SpawnOptions & { variation?: number; loop?: boolean } = {}): VoiceHandle | null {
+    const pool = this.samplesFor(slots);
+    if (!pool.length) return null;
+    const v = o.variation ?? 1;
+    const info = this.pickSample(Array.isArray(slots) ? slots.join('|') : slots, pool);
+    return this.playSample(info, pos, peakSpl + (this.random() * 2 - 1) * v, { ...o, semitones: (this.random() * 2 - 1) * v });
+  }
+
+  /** Non-positional looping bed (wind, birds) at `peakSpl` (its peak level; beds sit ~10 dB under that in RMS). */
+  loopSample(slots: string | string[], peakSpl: number, o: SpawnOptions = {}): VoiceHandle | null {
+    return this.sampleAt(slots, [0, 0, 0], peakSpl, { bus: BUS.ENV, spatial: false, reverbSendDb: -90, variation: 0, loop: true, ...o });
+  }
 
   // ------------------------------------------------------------------------------------- global state
   setListener(pos: Vec3Like, forward: Vec3Like, up: Vec3Like) {
@@ -164,21 +275,46 @@ export abstract class VorpBase {
    */
   gunshot(preset: GunshotPreset, muzzle: Vec3Like, dir: Vec3Like, actionPos: Vec3Like | null, extra: Record<string, number> = {}, o: SpawnOptions = {}) {
     const vals: Record<string, number> = { ...preset.params, seed: this.seed(), ...extra };
-    const params = paramArray(GUNSHOT_PARAMS, vals);
     const minHit = Math.min(0, ...preset.action.hits.map((h) => h.timeMs));
     const lead = -minHit; // mechanical events before ignition (hammer fall) shift the blast later
     const tailSend = vals.tailSendDb ?? 0;
-    const blast = this.spawn(KIND.GUNSHOT, muzzle, params, {
+    const so: SpawnOptions = {
       ...o, dir, directivityDb: vals.directivityDb, rearLpHz: vals.rearLpHz, delayMs: (o.delayMs ?? 0) + lead,
       reverbSendDb: (o.reverbSendDb ?? this.zoneSendDb) + tailSend,
-    });
+    };
+    // recorded report: pool by state (suppressed / full-auto / plain), falling back to pure synthesis when nothing is loaded
+    const S = preset.samples;
+    const supp = Math.max(0, Math.min(1, vals.suppress ?? 0));
+    let pool: SampleInfo[] = [];
+    if (S) {
+      if (supp > 0.5 && S.suppressed) pool = this.samplesFor(S.suppressed);
+      if (!pool.length && (extra.auto ?? 0) > 0.5 && S.auto) pool = this.samplesFor(S.auto);
+      if (!pool.length) pool = this.samplesFor(S.shot);
+    }
+    const samples: VoiceHandle[] = [];
+    let take: SampleInfo | null = null;
+    let blast: VoiceHandle | null = null;
+    if (pool.length) {
+      const info = take = this.pickSample(preset.name, pool);
+      const peakDb = vals.peakSpl - (vals.suppRedDb ?? 28) * supp + (vals.firstPopDb ?? 0) * supp + (preset.sampleTrimDb ?? 0) + (this.random() * 2 - 1);
+      samples.push(this.playSample(info, muzzle, peakDb, { ...so, semitones: this.random() * 2 - 1 }));
+      const tail = S?.shotTail ? this.samplesFor(S.shotTail) : [];
+      if (tail.length) samples.push(this.playSample(this.pickSample(preset.name + '/tail', tail), muzzle, peakDb + (preset.sampleTailDb ?? -8), { ...so, semitones: (this.random() * 2 - 1) * 0.5 }));
+      const bedDb = preset.synthBedDb ?? -9;
+      if (bedDb > -90) {
+        // synth bed: body + sub + compacted spike, no report / precursor, quieter roar
+        const bed = { ...vals, peakSpl: vals.peakSpl + bedDb, crackDb: -90, precursorDb: -90, turbDb: (vals.turbDb ?? -6) - 12 };
+        blast = this.spawn(KIND.GUNSHOT, muzzle, paramArray(GUNSHOT_PARAMS, bed), so);
+      } else blast = samples[0];
+    } else blast = this.spawn(KIND.GUNSHOT, muzzle, paramArray(GUNSHOT_PARAMS, vals), so);
     let action: VoiceHandle | null = null;
     if (actionPos && preset.action.hits.length) {
       const modes = receiverModes(preset.action.brightness);
       const hits = preset.action.hits.map((h) => ({ ...h, timeMs: h.timeMs + lead }));
       action = this.modal(modes, hits, actionPos, preset.action.level, { ...o, delayMs: o.delayMs ?? 0 });
     }
-    return { blast, action };
+    /** `blast`: synth voice (full, or the bed under a recording); `samples`: recorded layers (empty = synthesis only); `take`: the recording picked. */
+    return { blast, action, samples, take };
   }
 
   modal(modes: Mode[], hits: { timeMs: number; amp: number; contactMs: number; noiseDb?: number }[], pos: Vec3Like, level = 1, o: SpawnOptions = {}) {
@@ -196,9 +332,21 @@ export abstract class VorpBase {
    */
   mech(name: MechName, pos: Vec3Like, o: SpawnOptions = {}) {
     const m: MechPreset = MECH[name];
-    const noise = this.noise(m.noise, pos, o);
+    // a loaded recording replaces the noise texture (peak ≈ noise RMS + 10 dB); the receiver ring stays
+    const rec = m.sample ? this.sampleAt(m.sample, pos, (m.noise.levelSpl ?? 70) + 10 + (m.sampleDb ?? 0), { bus: BUS.IMPACTS, ...o }) : null;
+    const noise = rec ?? this.noise(m.noise, pos, o);
     const ring = m.ring ? this.modal(receiverModes(m.ring.brightness), m.ring.hits, pos, m.ring.level, o) : null;
-    return { noise, ring };
+    return { noise, ring, recorded: rec !== null };
+  }
+
+  /**
+   * Surface impact (`IMPACTS[material]`, see presets) at `pos`; `scaleDb` adjusts the level. A loaded recording in
+   * slot family `impact.<material>` replaces the noise synthesis.
+   */
+  impact(material: string, pos: Vec3Like, scaleDb = 0, o: SpawnOptions = {}) {
+    const p = { ...(IMPACTS[material] ?? IMPACTS.dirt) };
+    p.levelSpl = (p.levelSpl ?? 110) + scaleDb;
+    return this.sampleAt(`impact.${material}`, pos, p.levelSpl, { bus: BUS.IMPACTS, ...o }) ?? this.noise(p, pos, { bus: BUS.IMPACTS, ...o });
   }
 
   /** Short quiet exhale ("breath") at `pos` — e.g. the shooter's mouth ≈ 0.15–0.3 m from the ears. */
@@ -267,6 +415,12 @@ export class Vorp extends VorpBase {
   /** Browsers start audio suspended until a user gesture. Call from a click/keydown handler. */
   async resume() { if (this.ctx.state !== 'running') await this.ctx.resume(); }
 
+  protected get engineRate() { return this.ctx.sampleRate; }
+  protected uploadSample(id: number, data: Float32Array) {
+    const copy = data.slice();
+    this.node.port.postMessage({ type: 'sample', id, data: copy }, [copy.buffer]);
+  }
+
   /** Send all queued commands to the audio thread. Call once per frame (after updating the listener). */
   flush() {
     const data = this.cmdb.take();
@@ -280,6 +434,37 @@ export class Vorp extends VorpBase {
     const mono = new Float32Array(buf.length);
     for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / buf.numberOfChannels; }
     this.node.port.postMessage({ type: 'sample', id, data: mono }, [mono.buffer]);
+  }
+
+  /**
+   * Loads every recording of a manifest's `sounds` section (fetched + decoded in parallel, mixed to mono at the
+   * context rate) and registers it under its slot. `prefetched` lets the host download the files before the
+   * AudioContext exists (vorp starts on the first user gesture) so only decoding happens here. Failures are
+   * logged and skipped: a missing slot simply keeps the synthesized version. Resolves to the loaded slots.
+   */
+  async loadSamples(manifest: SoundManifest, baseUrl = '', prefetched?: Map<string, ArrayBuffer>): Promise<string[]> {
+    const entries = Object.entries(manifest.sounds ?? {});
+    const loaded: string[] = [];
+    await Promise.all(entries.map(async ([slot, e]) => {
+      try {
+        let buf = prefetched?.get(slot);
+        if (!buf) {
+          const r = await fetch(baseUrl + e.file);
+          if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+          buf = await r.arrayBuffer();
+        }
+        const audio = await this.ctx.decodeAudioData(buf.slice(0)); // decodeAudioData detaches its input
+        const mono = new Float32Array(audio.length);
+        for (let c = 0; c < audio.numberOfChannels; c++) { const d = audio.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / audio.numberOfChannels; }
+        this.registerSample(slot, mono, audio.sampleRate, { gainDb: e.gainDb, loop: e.loop, trimMs: e.trimMs });
+        loaded.push(slot);
+      } catch (err) {
+        console.warn(`[vorp] recorded sound "${slot}" (${e.file}) not loaded:`, err);
+      }
+    }));
+    loaded.sort();
+    console.info(`[vorp] recorded sounds: ${loaded.length}/${entries.length} loaded${loaded.length ? ' — ' + loaded.join(', ') : ''}`);
+    return loaded;
   }
 
   /** Loads a convolution impulse response (mono or stereo WAV) and sets the convolution mix. */
@@ -302,6 +487,7 @@ interface Exports {
   vorp_exec(len: number): void;
   vorp_process(): number;
   vorp_meters_ptr(): number;
+  vorp_sample_set(id: number, ptr: number, len: number): void;
   vorp_render_source(kind: number, params: number, n: number, out: number, frames: number, sr: number): number;
 }
 
@@ -323,6 +509,14 @@ export class VorpOffline extends VorpBase {
     else mod = await WebAssembly.compile(wasm);
     const inst = await WebAssembly.instantiate(mod, {});
     return new VorpOffline(inst.exports as unknown as Exports, sampleRate);
+  }
+
+  protected get engineRate() { return this.sampleRate; }
+  protected uploadSample(id: number, data: Float32Array) {
+    const ptr = this.ex.vorp_alloc(data.length * 4);
+    new Float32Array(this.ex.memory.buffer, ptr, data.length).set(data); // fresh view: alloc may have grown memory
+    this.ex.vorp_sample_set(id, ptr, data.length);
+    this.ex.vorp_free(ptr, data.length * 4);
   }
 
   /** Execute queued commands now (also done automatically by `render`). */
@@ -362,6 +556,53 @@ export class VorpOffline extends VorpBase {
     this.ex.vorp_free(op, frames * 4);
     return out;
   }
+}
+
+/** Linear resampling (good enough for foley; shots are converted offline by tools/fetch-sounds.mjs). */
+export function resampleLinear(data: Float32Array, from: number, to: number): Float32Array {
+  const n = Math.max(1, Math.round((data.length * to) / from));
+  const out = new Float32Array(n);
+  const step = from / to;
+  for (let i = 0; i < n; i++) {
+    const x = i * step, j = Math.min(data.length - 1, x | 0), f = x - j;
+    const a = data[j], b = data[Math.min(data.length - 1, j + 1)];
+    out[i] = a + (b - a) * f;
+  }
+  return out;
+}
+
+/** Decode a PCM / float WAV (8/16/24/32-bit) into planar channels — for Node tools and tests (browsers use decodeAudioData). */
+export function decodeWav(buf: ArrayBuffer): { sampleRate: number; channels: Float32Array[] } {
+  const v = new DataView(buf);
+  const tag = (o: number) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+  if (tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV file');
+  let o = 12, fmt: { format: number; channels: number; sampleRate: number; bits: number } | null = null, data: [number, number] | null = null;
+  while (o + 8 <= v.byteLength) {
+    const id = tag(o), len = v.getUint32(o + 4, true);
+    if (id === 'fmt ') {
+      let format = v.getUint16(o + 8, true);
+      if (format === 0xfffe && len >= 26) format = v.getUint16(o + 32, true); // WAVE_FORMAT_EXTENSIBLE: sub-format
+      fmt = { format, channels: v.getUint16(o + 10, true), sampleRate: v.getUint32(o + 12, true), bits: v.getUint16(o + 22, true) };
+    } else if (id === 'data') { data = [o + 8, Math.min(len, v.byteLength - o - 8)]; break; }
+    o += 8 + len + (len & 1);
+  }
+  if (!fmt || !data) throw new Error('WAV without fmt/data chunk');
+  const { channels: nc, bits } = fmt;
+  const bps = bits / 8, frames = Math.floor(data[1] / (bps * nc));
+  const channels = Array.from({ length: nc }, () => new Float32Array(frames));
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < nc; c++) {
+      const p = data[0] + (i * nc + c) * bps;
+      let x: number;
+      if (fmt.format === 3) x = bits === 64 ? v.getFloat64(p, true) : v.getFloat32(p, true);
+      else if (bits === 8) x = (v.getUint8(p) - 128) / 128;
+      else if (bits === 16) x = v.getInt16(p, true) / 32768;
+      else if (bits === 24) x = ((v.getUint8(p) | (v.getUint8(p + 1) << 8) | (v.getInt8(p + 2) << 16)) << 8) / 2147483648;
+      else x = v.getInt32(p, true) / 2147483648;
+      channels[c][i] = x;
+    }
+  }
+  return { sampleRate: fmt.sampleRate, channels };
 }
 
 /** Encode planar float stereo as a 16-bit PCM WAV blob. */

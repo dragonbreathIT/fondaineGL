@@ -3,3 +3,5 @@ crates/target/
 dist/**/*.map
 dist/assets/
 captures/
+assets/*
+!assets/README.md

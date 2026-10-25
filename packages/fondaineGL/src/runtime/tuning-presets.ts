@@ -27,18 +27,33 @@ export function registerRenderTuning(tuning: Tuning, r: Renderer) {
   t.bool('Global illumination', S.gi, 'enabled', { label: 'Baked GI probes', help: 'Path-traced at load: sky occlusion + multi-bounce sun/sky light. Replaces the analytic fill inside the probe volume.' })
     .number('Global illumination', S.gi, 'intensity', { label: 'GI intensity', min: 0, max: 3, step: 0.01, help: 'Keep at 1 for physical correctness.' });
 
-  t.number('Atmosphere', S.wind, 'speed', { label: 'Wind speed', min: 0, max: 20, step: 0.1, unit: 'm/s', help: 'Drives foliage sway (and should match the physics/particle wind).' })
-    .number('Atmosphere', S.wind, 'bend', { label: 'Foliage bend', min: 0, max: 0.2, step: 0.001, unit: 'm per m/s', help: 'Tip displacement of a 1 m blade per m/s of wind.' })
-    .number('Atmosphere', S.wind, 'turbulence', { label: 'Foliage flutter', min: 0, max: 1, step: 0.01 });
+  const w = r.wind.settings;
+  t.number('Wind', w, 'speed', { label: 'Wind speed', min: 0, max: 25, step: 0.1, unit: 'm/s', help: 'Mean surface wind. Drives foliage, smoke/dust drift, cloud drift (× wind aloft) and the ambience bed.' })
+    .number('Wind', w, 'direction', { label: 'Direction (blowing to)', min: 0, max: 360, step: 1, unit: '°', help: '0 = north (−Z), 90 = east (+X); same compass as the sun azimuth.' })
+    .number('Wind', w, 'gustiness', { label: 'Gustiness', min: 0, max: 1, step: 0.01, help: 'Gust peaks reach ≈ speed × (1 + 1.7 × gustiness).' })
+    .number('Wind', w, 'gustFrequency', { label: 'Gust rate', min: 0.02, max: 0.6, step: 0.01, unit: 'Hz' })
+    .number('Wind', w, 'turbulence', { label: 'Turbulence (flutter)', min: 0, max: 1, step: 0.01 })
+    .number('Wind', w, 'foliageBend', { label: 'Foliage bend', min: 0, max: 0.2, step: 0.001, unit: 'm per m/s', help: 'Tip displacement of a 1 m blade per m/s of wind.' })
+    .number('Wind', w, 'aloftFactor', { label: 'Wind aloft ×', min: 1, max: 6, step: 0.05, help: 'Cloud-level wind relative to the surface wind.' })
+    .number('Wind', w, 'aloftVeer', { label: 'Veer aloft', min: -90, max: 90, step: 1, unit: '°' });
 
-  t.bool('Clouds', S.clouds, 'enabled', { label: 'Cloud deck' })
-    .number('Clouds', S.clouds, 'coverage', { label: 'Coverage', min: 0, max: 1, step: 0.01, help: 'Fraction of sky covered (scattered ≈ 0.3–0.5, broken ≈ 0.6–0.85, overcast 1). For overcast also lower the sun illuminance.' })
-    .number('Clouds', S.clouds, 'density', { label: 'Optical density', min: 0, max: 6, step: 0.01 })
-    .number('Clouds', S.clouds, 'altitude', { label: 'Altitude', min: 300, max: 9000, step: 10, unit: 'm', help: 'Cumulus base ≈ 1–2 km.' })
-    .number('Clouds', S.clouds, 'scale', { label: 'Feature size', min: 200, max: 12000, step: 10, unit: 'm' })
-    .number('Clouds', S.clouds, 'windSpeed', { label: 'Wind aloft', min: 0, max: 60, step: 0.1, unit: 'm/s' })
-    .number('Clouds', S.clouds, 'windDirDeg', { label: 'Wind direction', min: 0, max: 360, step: 1, unit: '°' })
-    .number('Clouds', S.clouds, 'shadowStrength', { label: 'Cloud shadows', min: 0, max: 1, step: 0.01, help: 'How much a thick cloud dims direct sunlight on the ground.' });
+  const c = r.sky.clouds.settings;
+  t.bool('Clouds', c, 'enabled', { label: 'Clouds' })
+    .choice('Clouds', c, 'mode', ['volumetric', 'flat'], { label: 'Mode', help: 'volumetric = ray-marched 3D clouds; flat = cheap 2D deck. Individual clouds (sky.addCloud) can pick either.' })
+    .choice('Clouds', c, 'quality', ['auto', 'low', 'medium', 'high'], { label: 'Quality', help: 'Dome resolution and march steps. auto = high on a GPU, low on software WebGPU (headless captures).' })
+    .number('Clouds', c, 'coverage', { label: 'Coverage', min: 0, max: 1, step: 0.01, help: 'Fraction of sky covered (scattered ≈ 0.3–0.5, broken ≈ 0.6–0.85, overcast 1).' })
+    .number('Clouds', c, 'type', { label: 'Cloud type', min: 0, max: 1, step: 0.01, help: '0 flat stratus / stratocumulus … 1 towering cumulus.' })
+    .number('Clouds', c, 'density', { label: 'Extinction', min: 2, max: 120, step: 0.5, unit: '1/km', help: 'Optical density of a fully dense cloud. Cumulus ≈ 20–80.' })
+    .number('Clouds', c, 'altitude', { label: 'Base altitude', min: 300, max: 6000, step: 10, unit: 'm', help: 'Cumulus base ≈ 1–2 km.' })
+    .number('Clouds', c, 'thickness', { label: 'Layer thickness', min: 200, max: 5000, step: 10, unit: 'm' })
+    .number('Clouds', c, 'featureScale', { label: 'System size', min: 1000, max: 20000, step: 100, unit: 'm', help: 'Size of cloud systems and the gaps between them.' })
+    .number('Clouds', c, 'shapeScale', { label: 'Shape scale', min: 1000, max: 15000, step: 100, unit: 'm' })
+    .number('Clouds', c, 'detailScale', { label: 'Detail scale', min: 100, max: 2000, step: 10, unit: 'm' })
+    .number('Clouds', c, 'windFactor', { label: 'Drift (× wind aloft)', min: 0, max: 6, step: 0.05, help: 'Cloud drift speed relative to the Wind system\'s wind aloft.' })
+    .number('Clouds', c, 'shadowStrength', { label: 'Cloud shadows', min: 0, max: 1, step: 0.01, help: 'How much a thick cloud dims direct sunlight on the ground (1 = physical).' })
+    .number('Clouds', c, 'ambient', { label: 'Ambient light', min: 0, max: 3, step: 0.01, help: 'Sky/ground light scattered by the clouds (1 ≈ physical).' })
+    .number('Clouds', c, 'multiScatter', { label: 'Multiple scattering', min: 0.2, max: 4, step: 0.01, help: 'Sunlight energy boost standing in for higher scattering orders.' })
+    .number('Clouds', c, 'albedo', { label: 'Droplet albedo', min: 0.5, max: 1, step: 0.005 });
 
   t.choice('Exposure', S.exposure, 'mode', ['auto', 'manual', 'camera'], { label: 'Mode', help: 'auto = eye/camera metering; manual = EV100; camera = aperture/shutter/ISO of the Camera.' })
     .number('Exposure', S.exposure, 'ev100', { label: 'Manual EV100', min: -6, max: 20, step: 0.1, help: 'Sunny 16 ≈ 15, overcast ≈ 12, indoor ≈ 7, night ≈ 0.' })

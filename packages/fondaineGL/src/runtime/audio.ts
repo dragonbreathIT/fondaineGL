@@ -2,7 +2,7 @@
 // (image sources from physics raycasts), occlusion, distant reflectors, and supersonic cracks from
 // live projectiles passing the listener.
 
-import { Vorp, Tap, VoiceHandle, GunshotPreset, ZonePreset, whithamNWave, speedOfSound, IMPACTS, BUS, SpawnOptions } from '@fondaine/vorp';
+import { Vorp, Tap, VoiceHandle, GunshotPreset, ZonePreset, whithamNWave, speedOfSound, BUS, SpawnOptions, SoundManifest } from '@fondaine/vorp';
 import { Camera, vec3, Vec3 } from '../gl';
 import { PhysicsWorld } from './physics';
 
@@ -24,11 +24,13 @@ export interface AudioSettings {
   cracks: boolean;
   /** Let the engine's Wind system drive the ambience wind bed (level, gustiness, gust rate). */
   windAmbience: boolean;
+  /** Start recorded ambience beds (`amb.birds`, `amb.wind` slots) when they are loaded. */
+  ambienceBeds: boolean;
 }
 
 export class AudioSystem {
   vorp: Vorp | null = null;
-  readonly settings: AudioSettings = { reflections: true, probeRays: 14, probeDistance: 45, occlusion: true, occlusionDb: -14, occlusionLowpassHz: 1100, cracks: true, windAmbience: true };
+  readonly settings: AudioSettings = { reflections: true, probeRays: 14, probeDistance: 45, occlusion: true, occlusionDb: -14, occlusionLowpassHz: 1100, cracks: true, windAmbience: true, ambienceBeds: true };
   /** Surface acoustics by physics material id. */
   readonly surfaces = new Map<number, SurfaceAcoustics>();
   readonly listener = { position: vec3.create(), forward: vec3.create(0, 0, -1), up: vec3.create(0, 1, 0) };
@@ -63,6 +65,59 @@ export class AudioSystem {
 
   /** Run `fn` now if audio is up, otherwise once it starts. */
   whenReady(fn: () => void) { if (this.vorp) fn(); else this.pending.push(fn); }
+
+  /** Slots of the recorded sounds that are registered with vorp (empty until `loadSoundAssets` ran and audio started). */
+  readonly sounds = new Set<string>();
+  private beds: VoiceHandle[] = [];
+
+  /**
+   * Recorded sounds (`sounds` section of `assets/manifest.json`, written by `tools/fetch-sounds.mjs`). The files are
+   * fetched right away (no AudioContext needed) and decoded + registered the moment vorp starts (first click), so
+   * the loading screen is not held up by audio. Anything missing or failing keeps its synthesized version.
+   * `manifest` is the manifest URL or the parsed manifest object (then `baseUrl` is where its files live).
+   * Resolves once the files are fetched, with the slots that will be registered.
+   */
+  async loadSoundAssets(manifest: string | SoundManifest, baseUrl?: string): Promise<string[]> {
+    let m: SoundManifest;
+    let base = baseUrl;
+    if (typeof manifest === 'string') {
+      base ??= manifest.slice(0, manifest.lastIndexOf('/') + 1);
+      try {
+        const r = await fetch(manifest, { cache: 'no-cache' });
+        if (!r.ok) return [];
+        m = (await r.json()) as SoundManifest;
+      } catch { return []; }
+    } else m = manifest;
+    base ??= '';
+    const entries = Object.entries(m.sounds ?? {});
+    if (!entries.length) return [];
+    const buffers = new Map<string, ArrayBuffer>();
+    await Promise.all(entries.map(async ([slot, e]) => {
+      try {
+        const r = await fetch(base + e.file);
+        if (r.ok) buffers.set(slot, await r.arrayBuffer());
+        else console.warn(`[audio] recorded sound "${slot}": ${base + e.file} → ${r.status}`);
+      } catch (err) { console.warn(`[audio] recorded sound "${slot}" not fetched`, err); }
+    }));
+    const only: SoundManifest = { sounds: Object.fromEntries(entries.filter(([slot]) => buffers.has(slot))) };
+    this.whenReady(() => {
+      void this.vorp!.loadSamples(only, base, buffers).then((loaded) => {
+        for (const s of loaded) this.sounds.add(s);
+        this.startBeds();
+      });
+    });
+    return [...buffers.keys()];
+  }
+
+  /** Looping ambience beds from recordings (birds, wind) under the synthesized wind. */
+  private startBeds() {
+    const v = this.vorp;
+    if (!v || !this.settings.ambienceBeds || this.beds.length) return;
+    const birds = v.loopSample('amb.birds', 52);
+    if (birds) this.beds.push(birds);
+    const wind = v.loopSample('amb.wind', 48);
+    if (wind) this.beds.push(wind);
+  }
 
   setZone(z: ZonePreset) { this.zone = z; this.vorp?.setZone(z); if (this.lastWind) this.setWind(...this.lastWind); }
 
@@ -184,17 +239,21 @@ export class AudioSystem {
     const v = this.vorp;
     if (!v) return null;
     const r = v.gunshot(preset, muzzle, dir, actionPos, extra);
-    this.finish(r.blast, muzzle, dir, preset.params.directivityDb ?? 9);
+    const taps = this.computeTaps(muzzle, dir, preset.params.directivityDb ?? 9);
+    const occ = this.occlusionOf(muzzle);
+    for (const h of r.samples.includes(r.blast) ? r.samples : [r.blast, ...r.samples]) {
+      h.setTaps(taps);
+      if (occ) h.setOcclusion(occ.db, occ.lowpass);
+    }
     if (r.action && actionPos) r.action.setTaps(this.computeTaps(actionPos, null, 0).slice(0, 4));
     return r;
   }
 
+  /** Surface impact from the vorp IMPACTS presets, or the recorded `impact.<material>` slot when loaded. */
   impact(material: string, pos: ArrayLike<number>, scaleDb = 0) {
     const v = this.vorp;
     if (!v) return null;
-    const p = { ...(IMPACTS[material] ?? IMPACTS.dirt) };
-    p.levelSpl = (p.levelSpl ?? 110) + scaleDb;
-    const h = v.noise(p, pos, { bus: BUS.IMPACTS });
+    const h = v.impact(material, pos, scaleDb);
     this.finish(h, pos, null, 0);
     return h;
   }
@@ -224,10 +283,12 @@ export class AudioSystem {
     return v.breath(pos, o);
   }
 
-  footstep(values: Record<string, number>, pos: ArrayLike<number>) {
+  /** One footstep (`FOOTSTEPS[surface]` values at 1 m); with `surface` given, a loaded `step.<surface>` recording replaces the synthesis. */
+  footstep(values: Record<string, number>, pos: ArrayLike<number>, surface?: string) {
     const v = this.vorp;
     if (!v) return null;
-    return v.noise(values, pos, { bus: BUS.ENV, reverbSendDb: v.zoneSendDb });
+    const o = { bus: BUS.ENV, reverbSendDb: v.zoneSendDb };
+    return (surface ? v.sampleAt(`step.${surface}`, pos, values.levelSpl ?? 70, o) : null) ?? v.noise(values, pos, o);
   }
 
   // ------------------------------------------------------------------------------------------- cracks

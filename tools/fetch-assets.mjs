@@ -397,10 +397,17 @@ async function local(file, slot) {
 }
 
 function writeCredits(m) {
-  const rows = [...Object.entries(m.textures), ...Object.entries(m.models)];
-  const lines = ['# Asset credits', '', 'Downloaded by `tools/fetch-assets.mjs`. CC-BY assets require this attribution when you ship.', '', '| Slot | Asset | Author | Licence | Link |', '|---|---|---|---|---|'];
-  for (const [slot, e] of rows) lines.push(`| ${slot} | ${e.title ?? ''} | ${e.author ?? ''} | ${e.license ?? ''} | ${e.url ?? ''} |`);
-  writeFileSync(join(ASSETS, 'CREDITS.md'), lines.join('\n') + '\n');
+  // shared with tools/fetch-sounds.mjs (same table, `sounds` section included) — keep both in sync
+  const esc = (x) => String(x ?? '').replace(/\|/g, '\\|');
+  const lines = ['# Asset credits', '', 'Downloaded by `tools/fetch-assets.mjs` (textures, models) and `tools/fetch-sounds.mjs` (sounds). Only CC0 and CC-BY content is accepted; CC-BY assets require this attribution when you ship. Nothing in this folder is committed.', ''];
+  for (const [title, rows] of [['Textures', m.textures ?? {}], ['Models', m.models ?? {}], ['Sounds', m.sounds ?? {}]]) {
+    const entries = Object.entries(rows);
+    if (!entries.length) continue;
+    lines.push(`## ${title}`, '', '| Slot | Asset | Author | Licence | Link |', '|---|---|---|---|---|');
+    for (const [slot, e] of entries) lines.push(`| ${esc(slot)} | ${esc(e.title)} | ${esc(e.author)} | ${esc(e.license)} | ${esc(e.url)} |`);
+    lines.push('');
+  }
+  writeFileSync(join(ASSETS, 'CREDITS.md'), lines.join('\n'));
 }
 
 // ------------------------------------------------------------------------------------------- main
