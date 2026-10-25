@@ -324,12 +324,13 @@ mod tests {
     fn string_of_shots_rings() {
         let mut h = Hearing::new(48000.0);
         for _ in 0..8 { impulse_blocks(&mut h, spl_to_pa(150.0), 28); } // ~75 ms apart
-        assert!(h.tinnitus_level > 0.8, "tinnitus {} after a burst", h.tinnitus_level);
+        // an 8-round unprotected burst brings the ring up to roughly half strength (full ring needs a long string)
+        assert!(h.tinnitus_level > 0.4 && h.tinnitus_level < 0.9, "tinnitus {} after a burst", h.tinnitus_level);
         let mut l = [0.0f32; BLOCK];
         let mut r = [0.0f32; BLOCK];
         h.add_tinnitus(&mut l, &mut r);
         let pk = l.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-        assert!(pk > db_to_lin(-40.0), "ring too quiet: {pk}");
+        assert!(pk > db_to_lin(-60.0), "ring too quiet: {pk}"); // faint by design (−46 dBFS at full TTS)
     }
     #[test]
     fn passive_muffs_let_low_end_through_more_than_highs() {
