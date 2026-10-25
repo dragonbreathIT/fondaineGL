@@ -8,11 +8,11 @@ import { TextureCache } from './texture';
 
 export type RecipeKind =
   | 'concrete' | 'wood' | 'anodized' | 'parkerized' | 'polymer' | 'paintedSteel' | 'ground' | 'gravel'
-  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass' | 'nitride' | 'machined' | 'skin' | 'glove';
+  | 'brass' | 'paperTarget' | 'rubber' | 'webbing' | 'cardboard' | 'bareSteel' | 'grass' | 'nitride' | 'machined' | 'skin' | 'glove' | 'brushed';
 
 const KIND_ID: Record<RecipeKind, number> = {
   concrete: 0, wood: 1, anodized: 2, parkerized: 3, polymer: 4, paintedSteel: 5, ground: 6, gravel: 7,
-  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14, nitride: 15, machined: 16, skin: 17, glove: 18,
+  brass: 8, paperTarget: 9, rubber: 10, webbing: 11, cardboard: 12, bareSteel: 13, grass: 14, nitride: 15, machined: 16, skin: 17, glove: 18, brushed: 19,
 };
 
 export interface RecipeParams {
@@ -422,6 +422,24 @@ fn recipe(uv: vec2f) -> S {
         s.ao = 1.0 - 0.25 * pores - 0.1 * (1.0 - cells);
       }
     }
+    case 19u: { // brushed black-nitride / DLC steel (slides, carriers): directional machining lines, holster wear
+      // extra = brushing direction: 0 → lines run along V (lengthwise on a lofted slide), 1 → along U
+      let along = select(vec2f(uv.x * 1600.0, uv.y * 3.0), vec2f(uv.x * 3.0, uv.y * 1600.0), extra > 0.5);
+      let per = select(vec2i(1600, 3), vec2i(3, 1600), extra > 0.5);
+      let brush = gnoise(along, per, seed + 3u);
+      let per2 = select(vec2i(800, 6), vec2i(6, 800), extra > 0.5);
+      let brush2 = gnoise(along * select(vec2f(0.5, 2.0), vec2f(2.0, 0.5), extra > 0.5), per2, seed + 5u);
+      let fine = fbm(uv, 180, 2, seed + 7u);
+      let blotch = fbm(uv, 4, 4, seed + 11u);
+      let sc = scratches(uv, seed + 13u, wear * 1.2);
+      let haze = smoothstep(0.55, 0.85, fbm(uv, 7, 4, seed + 17u) * 0.5 + 0.5) * wear * 0.5;
+      let bare = saturate(sc * 0.9);
+      let lines = 0.5 + 0.5 * brush + 0.25 * brush2;
+      s.albedo = mix(P.color.rgb * (0.94 + 0.1 * blotch + 0.04 * fine + 0.03 * lines) + vec3f(0.012) * haze, vec3f(0.6, 0.6, 0.62), bare);
+      s.metal = mix(0.9, 1.0, bare);
+      s.rough = mix(select(P.misc.y, 0.32, P.misc.y < 0.0) + 0.06 * (lines - 0.5) + 0.03 * fine + 0.1 * haze, 0.3, bare);
+      s.height = 0.5 + 0.35 * brush + 0.12 * brush2 + 0.03 * fine - 0.3 * sc;
+    }
     default: { // 14 grass (top-down meadow)
       let clump = fbm(uv, 8, 5, seed);
       let blades = abs(gnoise(vec2f(uv.x * 500.0, uv.y * 80.0), vec2i(500, 80), seed + 3u));
@@ -486,6 +504,7 @@ const DEFAULTS: Record<RecipeKind, Required<Omit<RecipeParams, 'size' | 'seed'>>
   machined: { tileMeters: 0.06, color: [0.62, 0.62, 0.63], color2: [0, 0, 0], wear: 0.15, dirt: 0, roughness: -1, bumpMm: 0.01, extra: 1 },
   skin: { tileMeters: 0.05, color: [0.56, 0.33, 0.24], color2: [0, 0, 0], wear: 0, dirt: 0, roughness: -1, bumpMm: 0.12, extra: 0 },
   glove: { tileMeters: 0.04, color: [0.045, 0.043, 0.04], color2: [0, 0, 0], wear: 0.35, dirt: 0.1, roughness: -1, bumpMm: 0.12, extra: 0 },
+  brushed: { tileMeters: 0.1, color: [0.03, 0.031, 0.034], color2: [0, 0, 0], wear: 0.2, dirt: 0, roughness: -1, bumpMm: 0.006, extra: 0 },
 };
 
 export class MaterialSynth {

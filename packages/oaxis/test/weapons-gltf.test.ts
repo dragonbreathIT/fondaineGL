@@ -82,9 +82,15 @@ function checkModel(tag: string, w: GLTFWeapon, ref: WeaponBuild, expectFlags: (
     for (const [k, side] of [['right', 1], ['left', -1], ['leftOnMagazine', -1]] as const) {
       const r = fit.reports[k];
       const c = worstClearance(fit.grips[k]!, m, side);
-      // the thumb root (t0) is the thenar pad: soft tissue that compresses up to ~2 mm against a grip; phalanges get 1 mm
-      check(c.digits >= (c.worstName === 't0' ? -2.0 : -1.0), `${tag} ${k} fitted: worst phalanx clearance ${c.digits.toFixed(1)} mm (${c.worstName}), palm ${c.palm.toFixed(1)} mm, ${r.changed} digits moved${r.palmPush ? `, hand pushed ${(r.palmPush * 1000).toFixed(1)} mm` : ''}`);
+      // the thumb root (t0) is the thenar pad: soft tissue that compresses against a grip (the firing thumb's pad wraps
+      // the frame's rear corner: up to 4 mm); phalanges get 1 mm
+      check(c.digits >= (c.worstName === 't0' ? (k === 'right' ? -4.0 : -2.0) : -1.0), `${tag} ${k} fitted: worst phalanx clearance ${c.digits.toFixed(1)} mm (${c.worstName}), palm ${c.palm.toFixed(1)} mm, ${r.changed} digits moved${r.palmPush ? `, hand pushed ${(r.palmPush * 1000).toFixed(1)} mm` : ''}`);
     }
+    // the firing thumb rides along the far side of the frame, never over the slide / receiver top
+    const t = debugHandClearance(fit.grips.right, m, 1)!;
+    const tips = [t.t0_pos, t.t1_pos, t.t2_pos];
+    const top = Math.max(...tips.map((p) => p[1])) - m.muzzle[1];
+    check(top < 0 && t.t2_pos[0] < 0.004, `${tag} firing thumb under the bore (highest joint ${(top * 1000).toFixed(0)} mm) with the tip on the far side (x ${(t.t2_pos[0] * 1000).toFixed(0)} mm)`);
   }
 }
 

@@ -90,6 +90,7 @@ export function handBoneFrames(fingers: readonly FingerPose[], thumb: ThumbPose,
   });
   const d0 = vec3.normalize(vec3.create(), vec3.set(vec3.create(), thumb.dir[0] * side, thumb.dir[1], thumb.dir[2]));
   const acc = basisQuat(d0, [0, 1, 0]);
+  if (thumb.twist) quat.multiply(acc, acc, quat.setAxisAngle(rot, [0, 0, 1], thumb.twist * side));
   const p = vec3.set(vec3.create(), THUMB.base[0] * side, THUMB.base[1], THUMB.base[2]);
   for (let j = 0; j < 3; j++) {
     if (j > 0) quat.multiply(acc, acc, quat.fromEuler(rot, -thumb.bend[j - 1], 0, 0));

@@ -19,6 +19,8 @@ export interface ThumbPose {
   dir: [number, number, number];
   /** Bend of the two thumb phalanges (radians), towards the palm. */
   bend: [number, number];
+  /** Axial rotation of the thumb about its metacarpal (radians, CMC opposition): turns the plane the phalanges bend in. */
+  twist?: number;
 }
 export interface HandPose {
   /** Wrist centre in weapon space. */
@@ -174,7 +176,7 @@ export class FirstPersonArms {
     let thumb = right.thumb;
     if (o.rightThumb && o.rightThumb.weight > 0) {
       const w = Math.min(1, o.rightThumb.weight), t = o.rightThumb.thumb;
-      thumb = { dir: lerp3(right.thumb.dir, t.dir, w), bend: [right.thumb.bend[0] + (t.bend[0] - right.thumb.bend[0]) * w, right.thumb.bend[1] + (t.bend[1] - right.thumb.bend[1]) * w] };
+      thumb = { dir: lerp3(right.thumb.dir, t.dir, w), bend: [right.thumb.bend[0] + (t.bend[0] - right.thumb.bend[0]) * w, right.thumb.bend[1] + (t.bend[1] - right.thumb.bend[1]) * w], twist: (right.thumb.twist ?? 0) + ((t.twist ?? 0) - (right.thumb.twist ?? 0)) * w };
     }
     const rp: HandPose = { ...right, fingers: [idx, right.fingers[1], right.fingers[2], right.fingers[3]], thumb };
     this.poseHand(this.sides[0], weaponRoot, rp, eye, this.options.shoulderRight);
@@ -314,6 +316,6 @@ export function blendPose(a: HandPose, b: HandPose, t: number): HandPose {
     fingerDir: lerp3(a.fingerDir, b.fingerDir, t),
     dorsal: lerp3(a.dorsal, b.dorsal, t),
     fingers: [0, 1, 2, 3].map((i) => blendFinger(a.fingers[i], b.fingers[i], t)) as HandPose['fingers'],
-    thumb: { dir: lerp3(a.thumb.dir, b.thumb.dir, t), bend: [a.thumb.bend[0] + (b.thumb.bend[0] - a.thumb.bend[0]) * t, a.thumb.bend[1] + (b.thumb.bend[1] - a.thumb.bend[1]) * t] },
+    thumb: { dir: lerp3(a.thumb.dir, b.thumb.dir, t), bend: [a.thumb.bend[0] + (b.thumb.bend[0] - a.thumb.bend[0]) * t, a.thumb.bend[1] + (b.thumb.bend[1] - a.thumb.bend[1]) * t], twist: (a.thumb.twist ?? 0) + ((b.thumb.twist ?? 0) - (a.thumb.twist ?? 0)) * t },
   };
 }

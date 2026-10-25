@@ -11,13 +11,13 @@
 import { Mesh, Renderer, Geometry, Material, lathe, extrude, vec3, box, roundedBox, circle2, roundRect2 } from '@fondaine/gl';
 import { GUNSHOTS } from '@fondaine/vorp';
 import { FirearmSpec, CALIBERS, casingGeometry } from '@fondaine/gl';
-import { PartBuilder, side, section, tubeZ, tubeX, tubeY, latheZ, latheX, discZ, P2, Prof, Profile, loft, prism, sweep, rrect, Station, screwHeadX } from './build';
+import { PartBuilder, side, section, tubeZ, tubeX, tubeY, latheZ, latheX, discZ, P2, Prof, Profile, loft, prism, sweep, rrect, Station, screwHeadX, filletPoly, plate, slab, bar, roundedPath, pinX, V3 } from './build';
 import { engravingMaterial, engravingQuadX } from './engrave';
 import { OAXIS, seg } from '../tuning';
 import type { WeaponBuild } from './compact-pistol';
 import type { WeaponGrips } from '../viewmodel/hands';
 
-export interface CarbineOptions { textureSize?: number; engravings?: boolean }
+export interface CarbineOptions { textureSize?: number; engravings?: boolean; /** Bake per-part atlases with ray-cast ambient occlusion (default on). */ bake?: boolean }
 
 // ---------------------------------------------------------------------------------------------- dimensions
 const AR = {
@@ -56,13 +56,13 @@ function railHeadLeft(p: Prof, hx: number, cut: boolean, top = AR.railTop, neck 
  * profile follows the Ø25 carrier bore around the far side, so the port shows a real interior, not a notch.
  */
 function upperProfile(o: { cut?: boolean; port?: boolean } = {}): Profile {
-  const hw = AR.upperHW, yb = AR.seam, yc = 0.004, R = hw, rf = 0.0018, n = 2;
+  const hw = AR.upperHW, yb = AR.seam, yc = 0.004, R = hw, rf = 0.0018, n = 5;
   const baseHX = 0.0105, neckHX = 0.00783, baseTop = AR.railNeck - 0.0015;
   const Rb = 0.0125, ycb = 0.0012;                    // carrier bore
   const aSpine = Math.acos(baseHX / R);
   const p = new Prof();
   p.arc(hw - rf, yb + rf, rf, -Math.PI / 2, 0, n);
-  const steps = 6, K = 14;
+  const steps = 14, K = 28;
   p.pt(hw, AR.portY0);
   if (o.port) {
     const xb0 = Math.sqrt(Rb * Rb - (AR.portY0 - ycb) ** 2), xb1 = Math.sqrt(Rb * Rb - (AR.portY1 - ycb) ** 2);
@@ -89,37 +89,38 @@ function upperProfile(o: { cut?: boolean; port?: boolean } = {}): Profile {
   return p.done();
 }
 
-/** Handguard cross-section: rounded octagon, top rail on the receiver's line, M-LOK pockets at 3 / 6 / 9 o'clock. */
+/** Handguard cross-section: rounded octagon (1 mm fillets on the chamfer edges), top rail on the receiver's line, M-LOK pockets at 3 / 6 / 9 o'clock. */
 function handguardProfile(o: { cut?: boolean; mlok?: boolean } = {}): Profile {
-  const hw = 0.0195, yb = -0.0205, yt = 0.0205, ch = 0.0075;
+  const hw = 0.0195, yb = -0.0205, yt = 0.0205, ch = 0.0075, rf = 0.0012;
   const slot = 0.0035, deep = 0.0085;       // M-LOK: 7 mm wide, pocket to 8.5 mm inside the wall
   const spineHX = 0.00783;
+  const s2 = Math.SQRT1_2;
   const p = new Prof();
   const m = !!o.mlok;
   // bottom flat with the 6 o'clock slot
   p.pt(-slot, yb).pt(-slot, m ? yb + deep : yb).pt(slot, m ? yb + deep : yb).pt(slot, yb);
-  p.pt(hw - ch, yb);
-  p.pt(hw, yb + ch);
+  p.corner(hw - ch, yb, [1, 0], [s2, s2], rf);
+  p.corner(hw, yb + ch, [s2, s2], [0, 1], rf);
   p.pt(hw, -slot).pt(m ? hw - deep : hw, -slot).pt(m ? hw - deep : hw, slot).pt(hw, slot);
-  p.pt(hw, yt - ch);
-  p.pt(hw - ch, yt);
+  p.corner(hw, yt - ch, [0, 1], [-s2, s2], rf);
+  p.corner(hw - ch, yt, [-s2, s2], [-1, 0], rf);
   // top: 21 mm rail base, neck, head
   p.pt(0.0105, yt).pt(0.0105, AR.railNeck - 0.0015).pt(spineHX, AR.railNeck - 0.0015);
   railHead(p, spineHX, !!o.cut);
   railHeadLeft(p, spineHX, !!o.cut);
   p.pt(-spineHX, AR.railNeck - 0.0015).pt(-0.0105, AR.railNeck - 0.0015).pt(-0.0105, yt);
-  p.pt(-(hw - ch), yt);
-  p.pt(-hw, yt - ch);
+  p.corner(-(hw - ch), yt, [-1, 0], [-s2, -s2], rf);
+  p.corner(-hw, yt - ch, [-s2, -s2], [0, -1], rf);
   p.pt(-hw, slot).pt(m ? -(hw - deep) : -hw, slot).pt(m ? -(hw - deep) : -hw, -slot).pt(-hw, -slot);
-  p.pt(-hw, yb + ch);
-  p.pt(-(hw - ch), yb);
+  p.corner(-hw, yb + ch, [0, -1], [s2, -s2], rf);
+  p.corner(-(hw - ch), yb, [s2, -s2], [1, 0], rf);
   return p.done();
 }
 
 /** Bolt carrier cross-section: Ø24.8 mm with the forward-assist notch band on the right side. */
 function carrierProfile(notch: boolean): Profile {
   const R = 0.0124, p = new Prof();
-  const n = 36;
+  const n = 96;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * TAU;
     // right side between −8° and +8°: notch band
@@ -166,14 +167,15 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
   const synth = renderer.synth;
   const size = o.textureSize ?? OAXIS.textureSize;
   const small = Math.min(size, 1024), tiny = Math.min(size, 512);
-  const anod = synth.material('anodized', { size, tileMeters: 0.22, color: [0.03, 0.031, 0.033], wear: 0.06, roughness: 0.52, seed: 11, bumpMm: 0.02 }, { name: 'anodized', edgeWear: 0.6, edgeWearRadius: 0.0025 });
-  const anodRail = synth.material('anodized', { size, tileMeters: 0.22, color: [0.03, 0.031, 0.033], wear: 0.12, roughness: 0.5, seed: 12, bumpMm: 0.02 }, { name: 'anodized-rail', edgeWear: 0.85, edgeWearRadius: 0.002 });
-  const anodHG = synth.material('anodized', { size, tileMeters: 0.25, color: [0.028, 0.029, 0.032], wear: 0.07, roughness: 0.54, seed: 19, bumpMm: 0.025 }, { name: 'anodized-handguard', edgeWear: 0.65, edgeWearRadius: 0.0022 });
+  // hardcoat (type III) anodise: a uniform fine matte grain; the only wear is on the rails and sharp edges
+  const anod = synth.material('anodized', { size, tileMeters: 0.2, color: [0.03, 0.031, 0.033], wear: 0.025, roughness: 0.5, seed: 11, bumpMm: 0.025 }, { name: 'anodized', edgeWear: 0.6, edgeWearRadius: 0.0022, specular: 0.5 });
+  const anodRail = synth.material('anodized', { size, tileMeters: 0.2, color: [0.03, 0.031, 0.033], wear: 0.08, roughness: 0.5, seed: 12, bumpMm: 0.02 }, { name: 'anodized-rail', edgeWear: 0.85, edgeWearRadius: 0.002 });
+  const anodHG = synth.material('anodized', { size, tileMeters: 0.22, color: [0.028, 0.029, 0.032], wear: 0.03, roughness: 0.52, seed: 19, bumpMm: 0.03 }, { name: 'anodized-handguard', edgeWear: 0.65, edgeWearRadius: 0.002, specular: 0.5 });
   const park = synth.material('parkerized', { size, tileMeters: 0.16, color: [0.05, 0.052, 0.05], wear: 0.2, seed: 13 }, { name: 'parkerized', edgeWear: 0.5, edgeWearRadius: 0.002 });
-  const carrierMat = synth.material('nitride', { size: small, tileMeters: 0.1, color: [0.04, 0.041, 0.043], wear: 0.35, roughness: 0.42, seed: 20 }, { name: 'bcg-nitride', edgeWear: 0.8, edgeWearRadius: 0.0025 });
-  const poly = synth.material('polymer', { size, tileMeters: 0.14, color: [0.03, 0.03, 0.032], extra: 0.3, roughness: 0.6, bumpMm: 0.12, seed: 14 }, { name: 'polymer', edgeWear: 0.25 });
-  const grip = synth.material('polymer', { size, tileMeters: 0.16, color: [0.03, 0.03, 0.032], extra: 0.95, roughness: 0.64, bumpMm: 0.4, seed: 15 }, { name: 'polymer-stipple', edgeWear: 0.2 });
-  const magPoly = synth.material('polymer', { size, tileMeters: 0.14, color: [0.034, 0.034, 0.036], extra: 0.5, roughness: 0.58, bumpMm: 0.2, seed: 21 }, { name: 'polymer-mag', edgeWear: 0.3 });
+  const carrierMat = synth.material('brushed', { size: small, tileMeters: 0.1, color: [0.04, 0.041, 0.043], wear: 0.12, roughness: 0.38, seed: 20, bumpMm: 0.006, extra: 0 }, { name: 'bcg-nitride', edgeWear: 0.8, edgeWearRadius: 0.0025 });
+  const poly = synth.material('polymer', { size, tileMeters: 0.14, color: [0.03, 0.03, 0.032], extra: 0.3, roughness: 0.55, bumpMm: 0.12, dirt: 0.15, seed: 14 }, { name: 'polymer', edgeWear: 0.12, edgeWearRadius: 0.0012, specular: 0.45 });
+  const grip = synth.material('polymer', { size, tileMeters: 0.216, color: [0.03, 0.03, 0.032], extra: 0.95, roughness: 0.6, bumpMm: 0.45, dirt: 0.4, seed: 15 }, { name: 'polymer-stipple', edgeWear: 0.12, edgeWearRadius: 0.0012, specular: 0.45 });
+  const magPoly = synth.material('polymer', { size, tileMeters: 0.14, color: [0.034, 0.034, 0.036], extra: 0.5, roughness: 0.56, bumpMm: 0.2, dirt: 0.25, seed: 21 }, { name: 'polymer-mag', edgeWear: 0.15, edgeWearRadius: 0.0012, specular: 0.45 });
   const rubber = synth.material('rubber', { size: tiny, seed: 16, extra: 1 }, { name: 'rubber' });
   const brass = synth.material('brass', { size: tiny, tileMeters: 0.03, seed: 17 }, { name: 'brass' });
   const steelBlack = synth.material('parkerized', { size: small, tileMeters: 0.08, color: [0.022, 0.022, 0.023], wear: 0.08, seed: 18 }, { name: 'steel-black', edgeWear: 0.5, edgeWearRadius: 0.0018 });
@@ -191,27 +193,27 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     const slots = railSlots(AR.upperRear - 0.004, AR.upperFront + 0.004);
     const st = cutStations(AR.upperRear, AR.upperFront, slots, [[AR.portZ0, AR.portZ1]], (cut, port) => upperProfile({ cut, port }));
     // rear face: the receiver's rear is closed around the charging-handle channel by the lower's tower
-    P.add(loft(st), anod);
+    P.add(loft(st, { capUV: 'stack' }), anod);
     // front receiver ring + barrel nut (inside the handguard, visible through its rear)
-    P.add(tubeZ(0.0160, AR.upperFront, AR.upperFront - 0.006, 0, 0, seg(28)), anod);
-    P.add(latheZ([[0.0125, 0], [0.0168, 0], [0.0168, 0.004], [0.0158, 0.0045], [0.0158, 0.0215], [0.0125, 0.0215]], AR.upperFront - 0.006, 0, seg(24)), park);
+    P.add(tubeZ(0.0160, AR.upperFront, AR.upperFront - 0.006, 0, 0, seg(64)), anod);
+    P.add(latheZ([[0.0125, 0], [0.0168, 0], [0.0168, 0.004], [0.0158, 0.0045], [0.0158, 0.0215], [0.0125, 0.0215]], AR.upperFront - 0.006, 0, seg(64)), park);
     // charging-handle channel at the rear top (dark slot under the rail)
-    P.add(roundedBox(0.0148, 0.0078, 0.03, 0.0006).translate(0, 0.0235, AR.upperRear - 0.01), dark);
+    P.add(roundedBox(0.0148, 0.0078, 0.03, 0.0006, 4).translate(0, 0.0235, AR.upperRear - 0.01), dark);
     // brass deflector: wedge behind the port
-    P.add(extrude([[uhw - 0.004, 0.0105], [uhw + 0.0068, 0.0235], [uhw + 0.0068, 0.0305], [uhw - 0.004, 0.0305]], 0.017, { bevel: 0.0015, bevelSegments: 2 }).rotateX(Math.PI / 2).translate(0, 0.0045, 0), anod);
+    P.add(slab(filletPoly([[uhw - 0.004, 0.0105], [uhw + 0.0068, 0.0235], [uhw + 0.0068, 0.0305], [uhw - 0.004, 0.0305]], [0.001, 0.0012, 0.0012, 0.001], 4), 0.017, 0.0015, 4).rotateX(Math.PI / 2).translate(0, 0.0045, 0), anod);
     // forward assist: housing along z with a ribbed plunger (right rear)
     const faX = uhw + 0.0042, faY = 0.009;
-    P.add(tubeZ(0.0068, 0.030, 0.062, faY, faX, seg(18)), anod);
-    P.add(latheZ([[0, 0], [0.0052, 0], [0.0062, 0.0015], [0.0062, 0.009], [0.0058, 0.0105], [0.0049, 0.011], [0, 0.011]], 0.073, faY, seg(20)).translate(faX, 0, 0), park);
+    P.add(tubeZ(0.0068, 0.030, 0.062, faY, faX, seg(48)), anod);
+    P.add(latheZ([[0, 0], [0.0052, 0], [0.0062, 0.0015], [0.0062, 0.009], [0.0058, 0.0105], [0.0049, 0.011], [0, 0.011]], 0.073, faY, seg(48)).translate(faX, 0, 0), park);
     for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; P.add(box(0.0007, 0.0028, 0.006).translate(0, 0.0063, 0).rotateZ(a).translate(faX, faY, 0.068), steelBlack); }
     // ejection port dust cover: hinged at the lower edge, swung open (hanging down along the lower)
-    const cover = roundedBox(0.0012, 0.0186, 0.0585, 0.0005);
+    const cover = roundedBox(0.0012, 0.0186, 0.0585, 0.0005, 4);
     P.add(cover.translate(0, -0.0093, 0).rotateZ(0.35).translate(uhw + 0.0012, AR.portY0 - 0.0005, (AR.portZ0 + AR.portZ1) / 2), park);
-    P.add(tubeZ(0.0014, AR.portZ0 + 0.004, AR.portZ1 - 0.004, AR.portY0 - 0.0008, uhw + 0.0012, 10), pins);
+    P.add(tubeZ(0.0014, AR.portZ0 + 0.004, AR.portZ1 - 0.004, AR.portY0 - 0.0008, uhw + 0.0012, 24), pins);
     // takedown / pivot pin heads on the lower (both sides) + receiver roll marks
     for (const sx of [-1, 1] as const) {
-      P.add(screwHeadX(0.0038, sx * (lhw + 0.0003), AR.seam - 0.0085, 0.0735, sx, 'dome', 16), pins);
-      P.add(screwHeadX(0.0038, sx * (lhw + 0.0003), AR.seam - 0.0085, -0.0655, sx, 'dome', 16), pins);
+      P.add(screwHeadX(0.0038, sx * (lhw + 0.0003), AR.seam - 0.0085, 0.0735, sx, 'dome'), pins);
+      P.add(screwHeadX(0.0038, sx * (lhw + 0.0003), AR.seam - 0.0085, -0.0655, sx, 'dome'), pins);
     }
   }
 
@@ -220,22 +222,22 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     const notches: [number, number][] = [];
     for (let i = 0; i < 9; i++) notches.push([-0.034 + i * 0.0045, -0.034 + i * 0.0045 + 0.0018]);
     const carrierZ0 = AR.boltFace + 0.012, carrierZ1 = AR.upperRear + 0.03;
-    P.add(loft(cutStations(carrierZ0, carrierZ1, notches, [], (n) => carrierProfile(n))), carrierMat, BOLT);
+    P.add(loft(cutStations(carrierZ0, carrierZ1, notches, [], (n) => carrierProfile(n)), { capUV: 'stack' }), carrierMat, BOLT);
     // barrel extension (fixed): fills the port ahead of the carrier in battery
-    P.add(tubeZ(0.0124, AR.boltFace - 0.012, carrierZ0 - 0.0006, 0, 0, seg(28)), park);
+    P.add(tubeZ(0.0124, AR.boltFace - 0.012, carrierZ0 - 0.0006, 0, 0, seg(64)), park);
     // bolt: lugs hidden in the extension; the bolt body + extractor + cam pin head are what you see in the port
-    P.add(tubeZ(0.0094, AR.boltFace, carrierZ0 + 0.0005, 0, 0, seg(24)), carrierMat, BOLT);
-    P.add(discZ(0.0094, 0.0004, 0, 0, AR.boltFace - 0.0002, seg(24)), steelBlack, BOLT);
-    P.add(roundedBox(0.0062, 0.0036, 0.0082, 0.001).translate(0.0072, 0.0108, carrierZ0 + 0.013), carrierMat, BOLT); // cam pin
-    P.add(roundedBox(0.0068, 0.0046, 0.018, 0.0012).translate(0, 0.0128, carrierZ0 + 0.052), carrierMat, BOLT);  // gas key
+    P.add(tubeZ(0.0094, AR.boltFace, carrierZ0 + 0.0005, 0, 0, seg(48)), carrierMat, BOLT);
+    P.add(discZ(0.0094, 0.0004, 0, 0, AR.boltFace - 0.0002, seg(48)), steelBlack, BOLT);
+    P.add(roundedBox(0.0062, 0.0036, 0.0082, 0.001, 4).translate(0.0072, 0.0108, carrierZ0 + 0.013), carrierMat, BOLT); // cam pin
+    P.add(roundedBox(0.0068, 0.0046, 0.018, 0.0012, 4).translate(0, 0.0128, carrierZ0 + 0.052), carrierMat, BOLT);  // gas key
     P.add(screwHeadX(0.0021, 0, 0, 0, 1, 'hex', 12).rotateZ(Math.PI / 2).translate(0, 0.0151, carrierZ0 + 0.046), steelBlack, BOLT);
     // charging handle: shaft in the receiver channel, T at the rear, latch on the left
     const chY = 0.0235;
-    P.add(roundedBox(0.0128, 0.0058, 0.105, 0.0012).translate(0, chY, AR.upperRear - 0.045), anod, CHARGE);
-    P.add(roundedBox(0.051, 0.0075, 0.019, 0.0022).translate(0.002, chY, AR.upperRear + 0.011), anod, CHARGE);
+    P.add(roundedBox(0.0128, 0.0058, 0.105, 0.0012, 4).translate(0, chY, AR.upperRear - 0.045), anod, CHARGE);
+    P.add(roundedBox(0.051, 0.0075, 0.019, 0.0022, 5).translate(0.002, chY, AR.upperRear + 0.011), anod, CHARGE);
     for (let i = 0; i < 6; i++) P.add(box(0.0038, 0.0012, 0.009).translate(-0.0205 + i * 0.0082, chY + 0.0042, AR.upperRear + 0.012), steelBlack, CHARGE);
-    P.add(roundedBox(0.0096, 0.0064, 0.021, 0.0014).translate(-0.0302, chY, AR.upperRear + 0.0105), park, CHARGE); // latch paddle
-    P.add(tubeY(0.0013, 0.009, -0.0245, chY, AR.upperRear + 0.016, 10), pins, CHARGE);                        // latch pin
+    P.add(roundedBox(0.0096, 0.0064, 0.021, 0.0014, 5).translate(-0.0302, chY, AR.upperRear + 0.0105), park, CHARGE); // latch paddle
+    P.add(tubeY(0.0013, 0.009, -0.0245, chY, AR.upperRear + 0.016, 24), pins, CHARGE);                        // latch pin
   }
 
   // ------------------------------------------------------------------ lower receiver
@@ -246,68 +248,69 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
       [-0.1145, sY + 0.0005], [0.0705, sY + 0.0005], [0.0705, -0.038], [0.012, -0.040], [-0.030, -0.040], [-0.040, -0.044],
       [-0.060, -0.0585], [-0.072, -0.052], [-0.080, -0.030], [-0.1145, -0.026],
     ];
-    P.add(side(body, lhw * 2, 0.002), anod);
+    P.add(plate(filletPoly(body, [0.0008, 0.0008, 0.0025, 0.0025, 0.002, 0.003, 0.004, 0.004, 0.0035, 0.0012], 5), lhw * 2, 0.0022, 5), anod);
     // receiver-extension tower (threaded boss the buffer tube screws into)
-    P.add(tubeZ(0.0185, 0.0985, AR.upperRear + 0.0005, 0, 0, seg(28)), anod);
+    P.add(tubeZ(0.0185, 0.0985, AR.upperRear + 0.0005, 0, 0, seg(64)), anod);
     // magazine well: separate wider block with a flared mouth
     const mw: P2[] = [[0.0705, sY], [0.0705, -0.070], [0.0725, -0.0745], [0.0105, -0.0745], [0.0125, -0.070], [0.0125, sY]];
-    P.add(side(mw, lhw * 2 + 0.0004, 0.0025), anod);
+    P.add(plate(filletPoly(mw, [0.0008, 0.0025, 0.002, 0.002, 0.0025, 0.0008], 5), lhw * 2 + 0.0004, 0.0025, 5), anod);
     // magwell cavity (inside faces, so an ejected magazine does not leave a hole)
-    P.add(prism(rrect(0.0238, 0.0565, 0.003, 3), 0, 0.064).rotateX(Math.PI / 2 + 0.17).flipWinding().translate(0, sY, -0.0415 + 0.011), dark);
+    P.add(prism(rrect(0.0238, 0.0565, 0.003, 5), 0, 0.064).rotateX(Math.PI / 2 + 0.17).flipWinding().translate(0, sY, -0.0415 + 0.011), dark);
     // trigger guard: fixed loop, pinned at the magwell, with a rear detent
-    P.add(side([[0.012, -0.040], [0.012, -0.0545], [0.0085, -0.0575], [-0.0265, -0.0575], [-0.030, -0.0545], [-0.030, -0.040], [-0.0255, -0.040], [-0.0255, -0.0525], [0.0075, -0.0525], [0.0075, -0.040]], 0.0088, 0.0016), anod);
-    P.add(tubeX(0.0013, 0.0115, 0, -0.043, -0.0095, 10), pins);
-    P.add(tubeX(0.0013, 0.0115, 0, -0.043, 0.0275, 10), pins);
+    // (swept bow: 8.8 mm wide, 5 mm deep, filleted; its ends are pinned inside the lower's lugs)
+    P.add(bar(roundedPath([[0, -0.036, -0.012], [0, -0.055, -0.012], [0, -0.055, 0.0275], [0, -0.036, 0.0275]] as V3[], [0, 0.004, 0.004, 0], 8), 0.005, 0.0088, 0.0018, 5), anod);
+    P.add(pinX(0.0013, 0.0115, 0, -0.043, -0.0095), pins);
+    P.add(pinX(0.0013, 0.0115, 0, -0.043, 0.0275), pins);
     // trigger
-    P.add(side([[-0.012, -0.040], [-0.0155, -0.040], [-0.0195, -0.047], [-0.0185, -0.0535], [-0.0135, -0.0525], [-0.0105, -0.046]], 0.0062, 0.0008), park, { trigger: true });
+    P.add(plate(filletPoly([[-0.012, -0.040], [-0.0155, -0.040], [-0.0195, -0.047], [-0.0185, -0.0535], [-0.0135, -0.0525], [-0.0105, -0.046]], [0.0005, 0.0005, 0.0012, 0.0012, 0.0012, 0.0012], 4), 0.0062, 0.001, 4), park, { trigger: true });
     // selector (left): SAFE points forward; rotates about x through the pivot
     const selPivot: [number, number, number] = [-(lhw + 0.0016), sY - 0.0092, 0.030];
-    P.add(tubeX(0.0045, 0.0028, selPivot[0], selPivot[1], selPivot[2], seg(16)), park, { selector: true });
-    P.add(roundedBox(0.0036, 0.0046, 0.0195, 0.0014).translate(selPivot[0] - 0.0012, selPivot[1], selPivot[2] - 0.0085), park, { selector: true });
+    P.add(tubeX(0.0045, 0.0028, selPivot[0], selPivot[1], selPivot[2], seg(40)), park, { selector: true });
+    P.add(roundedBox(0.0036, 0.0046, 0.0195, 0.0014, 5).translate(selPivot[0] - 0.0012, selPivot[1], selPivot[2] - 0.0085), park, { selector: true });
     for (let i = 0; i < 5; i++) P.add(box(0.0006, 0.0052, 0.0006).translate(selPivot[0] - 0.0031, selPivot[1], selPivot[2] - 0.0135 - i * 0.0015), steelBlack, { selector: true });
     // selector detent markings on the left side
     if (o.engravings !== false) {
-      const m = engravingMaterial(renderer, ['SAFE   SEMI   AUTO'], 0.028, 0.0028, { px: 512, color: [0.8, 0.8, 0.78], metallic: 0, roughness: 0.6, tracking: 0.05, align: 'center' });
+      const m = engravingMaterial(renderer, ['SAFE   SEMI   AUTO'], 0.028, 0.0028, { px: 1024, color: [0.8, 0.8, 0.78], metallic: 0, roughness: 0.6, tracking: 0.08, align: 'center' });
       if (m) P.add(engravingQuadX(-(lhw + 0.00008), sY - 0.0028, 0.021, 0.028, 0.0028, -1), m);
-      const rm = engravingMaterial(renderer, ['FONDAINE ARMS', 'MOD. FA-15   CAL. 5.56 NATO'], 0.046, 0.009, { px: 1024, color: [0.75, 0.75, 0.74], metallic: 0, roughness: 0.6, tracking: 0.08, align: 'left' });
+      const rm = engravingMaterial(renderer, ['FONDAINE ARMS', 'MOD. FA-15   CAL. 5.56 NATO'], 0.046, 0.009, { px: 2048, color: [0.75, 0.75, 0.74], metallic: 0, roughness: 0.6, tracking: 0.1, align: 'left' });
       if (rm) P.add(engravingQuadX(-(0.0146 + 0.00008), -0.030, -0.0415, 0.046, 0.009, -1), rm);
-      const sn = engravingMaterial(renderer, ['FA15-0042117'], 0.028, 0.0034, { px: 512, color: [0.78, 0.78, 0.77], metallic: 0, roughness: 0.6, tracking: 0.08, align: 'left' });
+      const sn = engravingMaterial(renderer, ['FA15-0042117'], 0.028, 0.0034, { px: 1024, color: [0.78, 0.78, 0.77], metallic: 0, roughness: 0.6, tracking: 0.1, align: 'left' });
       if (sn) P.add(engravingQuadX(0.0146 + 0.00008, -0.030, -0.0415, 0.028, 0.0034, 1), sn);
     }
     // magazine release (right): button in a fence
-    P.add(side([[0.004, sY - 0.004], [0.004, sY - 0.0185], [0.009, sY - 0.0225], [0.0205, sY - 0.0225], [0.0205, sY - 0.004]], 0.0036, 0.0012).translate(lhw + 0.0015, 0, 0), anod);
-    P.add(latheX([[0, 0], [0.0046, 0], [0.0046, 0.0024], [0.0038, 0.0032], [0, 0.0032]], lhw + 0.0005, sY - 0.0145, -0.0125, seg(16)), park);
+    P.add(plate(filletPoly([[0.004, sY - 0.004], [0.004, sY - 0.0185], [0.009, sY - 0.0225], [0.0205, sY - 0.0225], [0.0205, sY - 0.004]], 0.0012, 4), 0.0036, 0.0012, 4).translate(lhw + 0.0015, 0, 0), anod);
+    P.add(latheX([[0, 0], [0.0046, 0], [0.0046, 0.0024], [0.0038, 0.0032], [0, 0.0032]], lhw + 0.0005, sY - 0.0145, -0.0125, seg(40)), park);
     // bolt catch (left): paddle + the lower's boss and its pin
-    P.add(side([[0.012, sY - 0.004], [0.012, sY - 0.0165], [-0.002, sY - 0.0165], [-0.002, sY - 0.004]], 0.0032, 0.001).translate(-(lhw + 0.0012), 0, 0), anod);
-    P.add(roundedBox(0.0022, 0.0105, 0.0078, 0.0008).translate(-(lhw + 0.0028), sY - 0.0075, 0.0005), park);
-    P.add(roundedBox(0.0022, 0.0062, 0.0062, 0.0008).translate(-(lhw + 0.0028), sY - 0.0118, -0.0085), park);
-    P.add(tubeX(0.0011, 0.0036, -(lhw + 0.0014), sY - 0.0098, -0.0038, 8), pins);
+    P.add(plate(filletPoly([[0.012, sY - 0.004], [0.012, sY - 0.0165], [-0.002, sY - 0.0165], [-0.002, sY - 0.004]], 0.001, 4), 0.0032, 0.001, 4).translate(-(lhw + 0.0012), 0, 0), anod);
+    P.add(roundedBox(0.0022, 0.0105, 0.0078, 0.0008, 4).translate(-(lhw + 0.0028), sY - 0.0075, 0.0005), park);
+    P.add(roundedBox(0.0022, 0.0062, 0.0062, 0.0008, 4).translate(-(lhw + 0.0028), sY - 0.0118, -0.0085), park);
+    P.add(pinX(0.0011, 0.0036, -(lhw + 0.0014), sY - 0.0098, -0.0038), pins);
     // pistol grip: lofted along the grip axis (≈ 30° rake), textured, with a palm swell
     {
       const st: Station[] = [];
-      for (let i = 0; i <= 14; i++) {
-        const t = i / 14;
+      for (let i = 0; i <= 30; i++) {
+        const t = i / 30;
         const w = 0.0292 + 0.004 * Math.sin(Math.PI * t) ** 0.8 + 0.001 * t;
         const l = 0.0335 + 0.012 * t + 0.002 * Math.sin(Math.PI * t);
-        const pr = rrect(w, l, Math.min(0.009, w / 2 - 0.001), 4, 0, 0);
+        const pr = rrect(w, l, Math.min(0.009, w / 2 - 0.001), 8, 0, 0);
         st.push({ z: t * 0.088, prof: pr, smooth: i > 0 });
       }
-      let g = loft(st, { capStart: false });
+      let g = loft(st, { capStart: false, capUV: 'stack' });
       // front finger nub at the top of the front strap
-      g = Geometry.merge([g, roundedBox(0.026, 0.009, 0.012, 0.003).translate(0, -0.0198, 0.007)]);
+      g = Geometry.merge([g, roundedBox(0.026, 0.009, 0.012, 0.003, 5).translate(0, -0.0198, 0.007)]);
       // place: loft z (down the grip) → weapon: start inside the grip boss, tilt back 30°
       const ang = 0.52, gy = -0.036, gz = 0.060, gl = 0.088;
       P.add(g.rotateX(Math.PI / 2 - ang).translate(0, gy, gz), grip);
       // grip screw (bottom)
-      P.add(screwHeadX(0.0035, 0, 0, 0, 1, 'hex', 14).rotateZ(-Math.PI / 2).translate(0, gy - gl * Math.cos(ang) + 0.0006, gz + gl * Math.sin(ang)), pins);
+      P.add(screwHeadX(0.0035, 0, 0, 0, 1, 'hex').rotateZ(-Math.PI / 2).translate(0, gy - gl * Math.cos(ang) + 0.0006, gz + gl * Math.sin(ang)), pins);
     }
     // receiver extension: castle nut, end plate, buffer tube with 6 position holes underneath
-    P.add(latheZ([[0.0147, 0], [0.0196, 0], [0.0196, 0.0085], [0.0188, 0.0092], [0.0147, 0.0092]], 0.1275, 0, seg(28)), anod);
+    P.add(latheZ([[0.0147, 0], [0.0196, 0], [0.0196, 0.0085], [0.0188, 0.0092], [0.0147, 0.0092]], 0.1275, 0, seg(64)), anod);
     for (let i = 0; i < 6; i++) { const a = (i / 6) * TAU; P.add(box(0.0035, 0.0032, 0.0036).translate(0, 0.0185, 0).rotateZ(a).translate(0, 0, 0.1275 - 0.0018), dark); }
-    P.add(discZ(0.0205, 0.0022, 0, 0, AR.upperRear + 0.0016, seg(28)), park);
-    P.add(tubeZ(AR.tubeR, AR.upperRear, 0.335, 0, 0, seg(32)), anod);
-    P.add(latheZ([[0, 0], [0.0135, 0], [AR.tubeR, 0.0005], [AR.tubeR, 0.002], [0, 0.002]], 0.335, 0, seg(32)).translate(0, 0, 0.002), anod);
-    for (let i = 0; i < 6; i++) P.add(tubeY(0.0032, 0.004, 0, -AR.tubeR + 0.0004, 0.165 + i * 0.019, 12), dark);
+    P.add(discZ(0.0205, 0.0022, 0, 0, AR.upperRear + 0.0016, seg(64)), park);
+    P.add(tubeZ(AR.tubeR, AR.upperRear, 0.335, 0, 0, seg(64)), anod);
+    P.add(latheZ([[0, 0], [0.0135, 0], [AR.tubeR, 0.0005], [AR.tubeR, 0.002], [0, 0.002]], 0.335, 0, seg(64)).translate(0, 0, 0.002), anod);
+    for (let i = 0; i < 6; i++) P.add(tubeY(0.0032, 0.004, 0, -AR.tubeR + 0.0004, 0.165 + i * 0.019, 24), dark);
     P.add(box(0.006, 0.0025, 0.19).translate(0, -AR.tubeR + 0.0012, 0.235), anod); // position-hole track
   }
 
@@ -315,19 +318,19 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
   {
     const prof: P2[] = [[-0.205, 0.0185], [-0.330, 0.0215], [-0.342, 0.016], [-0.345, 0.0], [-0.345, -0.088], [-0.332, -0.095], [-0.300, -0.088], [-0.262, -0.052], [-0.236, -0.018], [-0.205, -0.0185]];
     const slingSlot: P2[] = [[-0.318, -0.045], [-0.318, -0.067], [-0.324, -0.070], [-0.330, -0.067], [-0.330, -0.045], [-0.324, -0.042]];
-    P.add(side(prof, 0.040, 0.004, [slingSlot]), poly);
+    P.add(side(prof, 0.040, 0.004, [slingSlot], 6), poly);
     // tube sleeve
-    P.add(tubeZ(AR.tubeR + 0.0025, 0.203, 0.236, 0, 0, seg(28)), poly);
+    P.add(tubeZ(AR.tubeR + 0.0025, 0.203, 0.236, 0, 0, seg(64)), poly);
     // release lever under the tube (hinged at the rear of the sleeve)
-    P.add(roundedBox(0.012, 0.0035, 0.032, 0.0012).translate(0, -AR.tubeR - 0.006, 0.224), poly);
-    P.add(roundedBox(0.009, 0.006, 0.0085, 0.0015).translate(0, -AR.tubeR - 0.0035, 0.2075), poly);
-    P.add(tubeX(0.0015, 0.0145, 0, -AR.tubeR - 0.0075, 0.238, 8), pins);
+    P.add(roundedBox(0.012, 0.0035, 0.032, 0.0012, 4).translate(0, -AR.tubeR - 0.006, 0.224), poly);
+    P.add(roundedBox(0.009, 0.006, 0.0085, 0.0015, 4).translate(0, -AR.tubeR - 0.0035, 0.2075), poly);
+    P.add(pinX(0.0015, 0.0145, 0, -AR.tubeR - 0.0075, 0.238), pins);
     // rubber butt pad with a ribbed face
-    P.add(side([[-0.345, 0.0], [-0.356, 0.0], [-0.357, -0.090], [-0.345, -0.092]], 0.042, 0.0035), rubber);
+    P.add(plate(filletPoly([[-0.345, 0.0], [-0.356, 0.0], [-0.357, -0.090], [-0.345, -0.092]], 0.003, 4), 0.042, 0.0035, 4), rubber);
     for (let i = 0; i < 9; i++) P.add(box(0.034, 0.0022, 0.0008).translate(0, -0.0835 + i * 0.0095, 0.3568), rubber);
     // QD sling socket on the left + the rear sling loop pin
-    P.add(latheX([[0, 0], [0.0062, 0], [0.0062, 0.0008], [0.0035, 0.0008], [0.0035, 0.0], [0, 0]], -0.0201, -0.0045, 0.2255, seg(16)), park);
-    P.add(tubeX(0.0012, 0.0404, 0, -0.056, 0.324, 8), pins);
+    P.add(latheX([[0, 0], [0.0062, 0], [0.0062, 0.0008], [0.0035, 0.0008], [0.0035, 0.0], [0, 0]], -0.0201, -0.0045, 0.2255, seg(40)), park);
+    P.add(pinX(0.0012, 0.0404, 0, -0.056, 0.324), pins);
   }
 
   // ------------------------------------------------------------------ handguard (M-LOK free-float) + barrel nut
@@ -336,16 +339,16 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     const mlok: [number, number][] = [];
     for (let i = 0; i < 8; i++) { const c = AR.hgZ0 - 0.030 - i * 0.040; mlok.push([c - 0.016, c + 0.016]); }
     const st = cutStations(AR.hgZ0, AR.hgZ1, slots, mlok, (cut, m) => handguardProfile({ cut, mlok: m }));
-    P.add(loft(st, { capStart: true, capEnd: true }), anodHG);
+    P.add(loft(st, { capStart: true, capEnd: true, capUV: 'stack' }), anodHG);
     // inner liner + anti-rotation tabs (the rear ring that clamps the barrel nut)
-    P.add(tubeZ(0.0163, AR.hgZ0, AR.hgZ1, 0, 0, seg(28)).flipWinding(), dark);
+    P.add(tubeZ(0.0163, AR.hgZ0, AR.hgZ1, 0, 0, seg(48)).flipWinding(), dark);
     // clamp screws at the rear (both sides, bottom)
     for (const sx of [-1, 1] as const) {
-      P.add(screwHeadX(0.0028, sx * 0.0196, -0.0155, AR.hgZ0 - 0.012, sx, 'hex', 12), steelBlack);
-      P.add(screwHeadX(0.0028, sx * 0.0196, -0.0155, AR.hgZ0 - 0.022, sx, 'hex', 12), steelBlack);
+      P.add(screwHeadX(0.0028, sx * 0.0196, -0.0155, AR.hgZ0 - 0.012, sx, 'hex'), steelBlack);
+      P.add(screwHeadX(0.0028, sx * 0.0196, -0.0155, AR.hgZ0 - 0.022, sx, 'hex'), steelBlack);
     }
     // front cap chamfer ring
-    P.add(discZ(0.0165, 0.001, 0, 0, AR.hgZ1 - 0.0004, seg(28)), dark);
+    P.add(discZ(0.0165, 0.001, 0, 0, AR.hgZ1 - 0.0004, seg(64)), dark);
   }
 
   // ------------------------------------------------------------------ barrel, gas system, muzzle device
@@ -353,26 +356,26 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
   {
     const bz0 = AR.upperFront - 0.006;
     // extension / barrel nut area (hidden) → Ø19 under the handguard → gas block journal → Ø17.8 to the thread shoulder
-    P.add(tubeZ(0.0095, bz0, -0.350, 0, 0, seg(28)), park);
-    P.add(latheZ([[0.0095, 0], [0.0095, 0.012], [0.0089, 0.013], [0.0089, 0.054], [0.0062, 0.0545], [0.0062, 0.062]], -0.350 - 0.045, 0, seg(28)), park);
-    P.add(tubeZ(0.0089, -0.395, AR.boltFace - AR.barrelLen + 0.001, 0, 0, seg(28)), park);
+    P.add(tubeZ(0.0095, bz0, -0.350, 0, 0, seg(64)), park);
+    P.add(latheZ([[0.0095, 0], [0.0095, 0.012], [0.0089, 0.013], [0.0089, 0.054], [0.0062, 0.0545], [0.0062, 0.062]], -0.350 - 0.045, 0, seg(64)), park);
+    P.add(tubeZ(0.0089, -0.395, AR.boltFace - AR.barrelLen + 0.001, 0, 0, seg(64)), park);
     // crush washer + A2-style flash hider (5 slots, closed bottom), crowned muzzle
     const fhZ0 = AR.boltFace - AR.barrelLen + 0.0005;
-    P.add(latheZ([[0.0062, 0], [0.011, 0], [0.011, 0.0022], [0.0062, 0.0022]], fhZ0 + 0.0022, 0, seg(24)), stainless);
-    const fhBody = latheZ([[0.0075, 0], [0.011, 0.0025], [0.0112, 0.012], [0.0112, 0.048], [0.0104, 0.0525], [0.0066, 0.0545], [0.0062, 0.0545], [0.0062, 0.0]], fhZ0, 0, seg(36));
+    P.add(latheZ([[0.0062, 0], [0.011, 0], [0.011, 0.0022], [0.0062, 0.0022]], fhZ0 + 0.0022, 0, seg(64)), stainless);
+    const fhBody = latheZ([[0.0075, 0], [0.011, 0.0025], [0.0112, 0.012], [0.0112, 0.048], [0.0104, 0.0525], [0.0066, 0.0545], [0.0062, 0.0545], [0.0062, 0.0]], fhZ0, 0, seg(72));
     P.add(fhBody, park);
     for (let k = 0; k < 5; k++) {
       const a = (k - 2) * (TAU / 7.2);  // five slots around the top 200°, solid bottom
-      P.add(roundedBox(0.0032, 0.006, 0.030, 0.0008).translate(0, 0.0098, 0).rotateZ(a).translate(0, 0, fhZ0 - 0.034), dark);
+      P.add(roundedBox(0.0032, 0.006, 0.030, 0.0008, 4).translate(0, 0.0098, 0).rotateZ(a).translate(0, 0, fhZ0 - 0.034), dark);
     }
-    P.add(discZ(0.0062, 0.0006, 0, 0, fhZ0 - 0.044, seg(20)), park);   // barrel crown seen down the hider
-    P.add(discZ(0.0029, 0.0008, 0, 0, fhZ0 - 0.0443, seg(16)), dark);
+    P.add(discZ(0.0062, 0.0006, 0, 0, fhZ0 - 0.044, seg(48)), park);   // barrel crown seen down the hider
+    P.add(discZ(0.0029, 0.0008, 0, 0, fhZ0 - 0.0443, seg(32)), dark);
     // low-profile gas block (mid-length) with set screws, gas tube running back into the receiver
     const gbZ = -0.372;
-    P.add(section(roundRect2(-0.0115, -0.0118, 0.0115, 0.0135, 0.0025, 4), 0.030, gbZ, 0.0012), park);
-    for (let i = 0; i < 2; i++) P.add(screwHeadX(0.0022, 0, 0, 0, 1, 'hex', 10).rotateZ(-Math.PI / 2).translate(0, -0.0118, gbZ - 0.007 + i * 0.014), steelBlack);
-    P.add(tubeZ(0.0024, gbZ - 0.012, AR.upperFront + 0.012, 0.0138, 0, 12), stainless);
-    P.add(tubeX(0.0011, 0.0245, 0, 0.0138, gbZ + 0.003, 8), pins); // gas tube roll pin
+    P.add(slab(rrect(0.023, 0.0253, 0.0025, 6, 0, 0.00085), 0.030, 0.0012, 4).translate(0, 0, gbZ), park);
+    for (let i = 0; i < 2; i++) P.add(screwHeadX(0.0022, 0, 0, 0, 1, 'hex').rotateZ(-Math.PI / 2).translate(0, -0.0118, gbZ - 0.007 + i * 0.014), steelBlack);
+    P.add(tubeZ(0.0024, gbZ - 0.012, AR.upperFront + 0.012, 0.0138, 0, 24), stainless);
+    P.add(pinX(0.0011, 0.0245, 0, 0.0138, gbZ + 0.003), pins); // gas tube roll pin
   }
 
   // ------------------------------------------------------------------ flip-up iron sights (deployed)
@@ -381,23 +384,23 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
   {
     // rear: base clamped on the receiver rail, hinged housing with two apertures, windage drum on the right
     const rz = 0.046;
-    P.add(section(roundRect2(-0.0125, AR.railTop - 0.0036, 0.0125, AR.railTop + 0.0085, 0.0018, 3), 0.034, rz + 0.001, 0.0008), anod);
-    P.add(tubeX(0.0022, 0.0252, 0, AR.railTop + 0.0105, rz + 0.012, 12), park);
+    P.add(slab(rrect(0.025, 0.0121, 0.0018, 5, 0, AR.railTop + 0.00245), 0.034, 0.0008, 3).translate(0, 0, rz + 0.001), anod);
+    P.add(pinX(0.0022, 0.0252, 0, AR.railTop + 0.0105, rz + 0.012), park);
     const housing: P2[] = [[-0.0118, AR.railTop + 0.0085], [0.0118, AR.railTop + 0.0085], [0.0118, sightTop + 0.0075], [0.0085, sightTop + 0.0098], [-0.0085, sightTop + 0.0098], [-0.0118, sightTop + 0.0075]];
     P.add(section(housing, 0.0042, rz, 0.0006, [circle2(0, sightTop, 0.0036, seg(20))]), park);
     // small-aperture leaf folded flat on the base in front of the housing (second aperture of the dual leaf)
     P.add(section(roundRect2(-0.0068, -0.0068, 0.0068, 0.0068, 0.0025, 3), 0.0012, 0, 0.0003, [circle2(0, 0, 0.0011, 12)]).rotateX(-Math.PI / 2).translate(0, AR.railTop + 0.0091, rz - 0.0095), park);
     // windage drum on the right, knurled
-    P.add(latheX([[0, 0], [0.0062, 0], [0.0062, 0.012], [0.0048, 0.0125], [0, 0.0125]], 0.0118, sightTop - 0.001, rz, seg(16)), park);
+    P.add(latheX([[0, 0], [0.0062, 0], [0.0062, 0.012], [0.0048, 0.0125], [0, 0.0125]], 0.0118, sightTop - 0.001, rz, seg(40)), park);
     for (let i = 0; i < 10; i++) { const a = (i / 10) * TAU; P.add(box(0.012, 0.0008, 0.0025).translate(0, 0.0062, 0).rotateX(a).translate(0.0118 + 0.006, sightTop - 0.001, rz), steelBlack); }
     // front: base, hinge, post between protective ears, elevation drum under the post
-    P.add(section(roundRect2(-0.0125, AR.railTop - 0.0036, 0.0125, AR.railTop + 0.0085, 0.0018, 3), 0.032, fsZ, 0.0008), anod);
-    P.add(tubeX(0.0022, 0.0252, 0, AR.railTop + 0.0105, fsZ - 0.011, 12), park);
+    P.add(slab(rrect(0.025, 0.0121, 0.0018, 5, 0, AR.railTop + 0.00245), 0.032, 0.0008, 3).translate(0, 0, fsZ), anod);
+    P.add(pinX(0.0022, 0.0252, 0, AR.railTop + 0.0105, fsZ - 0.011), park);
     const eb = AR.railTop + 0.0085;
     const ears: P2[] = [[-0.0112, eb], [0.0112, eb], [0.0112, sightTop - 0.004], [0.0062, sightTop + 0.0075], [0.0040, sightTop + 0.0075], [0.0062, eb + 0.004], [-0.0062, eb + 0.004], [-0.0040, sightTop + 0.0075], [-0.0062, sightTop + 0.0075], [-0.0112, sightTop - 0.004]];
-    P.add(section(ears, 0.0046, fsZ, 0.0006), park);
+    P.add(slab(filletPoly(ears, 0.0005, 3), 0.0046, 0.0006, 3).translate(0, 0, fsZ), park);
     // elevation drum (knurled) between the ears, square post on top with a white tip
-    P.add(tubeY(0.0046, 0.0052, 0, eb + 0.004 + 0.0026, fsZ, seg(18)), park);
+    P.add(tubeY(0.0046, 0.0052, 0, eb + 0.004 + 0.0026, fsZ, seg(40)), park);
     for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; P.add(box(0.0007, 0.0054, 0.0007).translate(0.0046, 0, 0).rotateY(a).translate(0, eb + 0.004 + 0.0026, fsZ), steelBlack); }
     P.add(box(0.0018, sightTop - (eb + 0.0092), 0.0018).translate(0, (sightTop + eb + 0.0092) / 2, fsZ), steelBlack);
     P.add(box(0.0018, 0.0012, 0.0019).translate(0, sightTop + 0.0006, fsZ), white);
@@ -408,7 +411,7 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     // centre path from the magwell down: straight for 60 mm, then a 25° arc forward
     const path: [number, number, number][] = [];
     const top: [number, number, number] = [0, AR.seam + 0.004, -0.0415 + 0.0105 * 0.17];
-    const n = 16, total = 0.205;
+    const n = 48, total = 0.205;
     for (let i = 0; i <= n; i++) {
       const s = (i / n) * total;
       const bend = Math.max(0, s - 0.055);
@@ -423,25 +426,28 @@ export function buildCarbine(renderer: Renderer, o: CarbineOptions = {}): Weapon
     // profile with two longitudinal ribs per side
     const prof = (() => {
       const p = new Prof(); const w = 0.0114, l = 0.0282, r = 0.0038;
-      p.arc(w - r, -l + r, r, -Math.PI / 2, 0, 3);
+      p.arc(w - r, -l + r, r, -Math.PI / 2, 0, 6);
       p.pt(w, -0.012).pt(w + 0.0007, -0.0105, true).pt(w, -0.009).pt(w, 0.006).pt(w + 0.0007, 0.0075, true).pt(w, 0.009);
-      p.arc(w - r, l - r, r, 0, Math.PI / 2, 3).arc(-w + r, l - r, r, Math.PI / 2, Math.PI, 3);
+      p.arc(w - r, l - r, r, 0, Math.PI / 2, 6).arc(-w + r, l - r, r, Math.PI / 2, Math.PI, 6);
       p.pt(-w, 0.009).pt(-w - 0.0007, 0.0075, true).pt(-w, 0.006).pt(-w, -0.009).pt(-w - 0.0007, -0.0105, true).pt(-w, -0.012);
-      p.arc(-w + r, -l + r, r, Math.PI, Math.PI * 1.5, 3);
+      p.arc(-w + r, -l + r, r, Math.PI, Math.PI * 1.5, 6);
       return p.done();
     })();
-    const body = sweep(prof, path, [0, 0, 1], (t) => (t > 0.955 ? [1.1, 1.08] : t > 0.935 ? [1.0 + (t - 0.935) * 5, 1.0 + (t - 0.935) * 4] : [1, 1]), { capStart: false, capEnd: true });
+    const body = sweep(prof, path, [0, 0, 1], (t) => (t > 0.955 ? [1.1, 1.08] : t > 0.935 ? [1.0 + (t - 0.935) * 5, 1.0 + (t - 0.935) * 4] : [1, 1]), { capStart: false, capEnd: true, capUV: 'stack' });
     P.add(body, magPoly, MAG);
     // follower + top cartridge visible at the feed lips
-    P.add(prism(rrect(0.0208, 0.050, 0.003, 3), -0.003, 0.004).rotateX(Math.PI / 2 + 0.17).translate(0, top[1] - 0.001, top[2]), new Material({ name: 'follower', baseColor: [0.75, 0.22, 0.03, 1], roughness: 0.6 }), MAG);
+    P.add(prism(rrect(0.0208, 0.050, 0.003, 5), -0.003, 0.004).rotateX(Math.PI / 2 + 0.17).translate(0, top[1] - 0.001, top[2]), new Material({ name: 'follower', baseColor: [0.75, 0.22, 0.03, 1], roughness: 0.6 }), MAG);
     const round = casingGeometry(0.0448, 0.0095, lathe);
     P.add(round.rotateX(-Math.PI / 2).translate(0.0045, top[1] + 0.003, top[2] + 0.027), brass, { ...MAG, round: true });
     // baseplate floor plate button
     const last = path[path.length - 1];
-    P.add(tubeY(0.0032, 0.0012, 0, last[1] - 0.0004, last[2], 12), magPoly, MAG);
+    P.add(tubeY(0.0032, 0.0012, 0, last[1] - 0.0004, last[2], 24), magPoly, MAG);
   }
 
-  const parts = P.finish();
+  // bake quality follows the texture setting (fast previews at ≤ 1024 px, full AO at 2048+)
+  const q = Math.min(1, Math.max(0.25, size / 2048));
+  const parts = P.finish({ bake: o.bake !== false && { rays: Math.round(32 * q), aoScale: 0.25 * q } });
+  for (const b of P.bakes) console.info(`[oaxis] bake ${b.material}: ${b.texSize[0]}x${b.texSize[1]} @ ${b.texelMm.toFixed(2)} mm/texel in ${b.ms.toFixed(0)} ms`);
   const casingMesh = new Mesh(renderer.dev, casingGeometry(0.0448, 0.0095, lathe));
   const stats = { triangles: P.triangles, buildMs: performance.now() - t0 };
   console.info(`[oaxis] AR carbine: ${stats.triangles.toLocaleString()} tris in ${stats.buildMs.toFixed(0)} ms`);
