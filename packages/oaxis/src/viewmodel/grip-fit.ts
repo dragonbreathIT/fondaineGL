@@ -11,7 +11,7 @@
 
 import { mat4, Mat4, quat, Quat, vec3, Vec3 } from '@fondaine/gl';
 import type { FirearmModel } from '@fondaine/gl';
-import { FINGERS, THUMB, PALM, handBoneFrames, basisQuat, BONES } from './hand-mesh';
+import { FINGERS, THUMB, PALM, handBoneFrames, basisQuat, BONES, BIND_THUMB } from './hand-mesh';
 import type { HandPose, FingerPose, WeaponGrips } from './hands';
 
 export interface GripFitOptions {
@@ -25,6 +25,14 @@ export interface GripFitOptions {
   fixPalm?: boolean;
   /** Lock the index finger of this hand (trigger finger) — default true for `right`. */
   lockIndex?: boolean;
+  /**
+   * Anatomical limits for the thumb (weapon space): every thumb joint stays below `maxY` and the tip at x ≤ `maxX`.
+   * The firing hand's thumb rides along the far side of the frame under the slide / receiver; without this the
+   * clearance search happily parks it on top of the slide.
+   */
+  thumbLimit?: { maxY: number; maxX?: number };
+  /** Fit the thumb at all (default true; off when only the fingers of the result are used). */
+  fitThumb?: boolean;
 }
 
 export interface GripFitReport { changed: number; /** distance the hand was moved (m) */ palmPush: number; /** [along dorsal, along fingerDir] (m) */ offset?: [number, number]; /** thumb metacarpal rotated (deg) to clear the weapon */ thumbTurnDeg?: number; fingers: { finger: number; from: number[]; to: number[] }[] }
@@ -147,6 +155,15 @@ function signedDistance(s: Soup, p: Vec3, maxR: number): number {
 const MAX_CURL: [number, number, number] = [1.65, 1.95, 1.25];
 const MAX_THUMB: [number, number] = [1.0, 1.3];
 
+/**
+ * How far each thumb segment's soft tissue may press into a grip when the firing thumb is fitted (m): the
+ * metacarpal capsule is mostly the thenar muscle (flattens a lot against the frame's rear corner), the phalanges
+ * only the pulp.
+ */
+const THUMB_SOFT_M = [0.0035, 0.002, 0.002];
+/** Pattern-search starts for the firing thumb: [turn across the palm°, turn away°, twist°]. */
+const THUMB_SEEDS = [[0, 0, 0], [80, 0, -80], [-80, 0, 80], [80, 0, 80], [-80, 0, -80]];
+
 function handMatrix(pose: HandPose): Mat4 {
   return mat4.fromRotationTranslation(mat4.create(), basisQuat(pose.fingerDir, pose.dorsal), pose.position);
 }
@@ -180,7 +197,7 @@ function largestClear(clear: (v: number) => number, lo: number, hi: number, targ
 export function fitHandPose(pose: HandPose, soup: Soup, side: 1 | -1, o: GripFitOptions = {}): { pose: HandPose; report: GripFitReport } {
   const gap = o.clearance ?? 0.0008;
   const maxCurl = o.maxCurl ?? MAX_CURL, maxThumb = o.maxThumbBend ?? MAX_THUMB;
-  const fitted: HandPose = { ...pose, position: [...pose.position] as [number, number, number], fingers: pose.fingers.map((f) => ({ ...f, curl: [...f.curl] as [number, number, number] })) as HandPose['fingers'], thumb: { dir: [...pose.thumb.dir] as [number, number, number], bend: [...pose.thumb.bend] as [number, number] } };
+  const fitted: HandPose = { ...pose, position: [...pose.position] as [number, number, number], fingers: pose.fingers.map((f) => ({ ...f, curl: [...f.curl] as [number, number, number] })) as HandPose['fingers'], thumb: { dir: [...pose.thumb.dir] as [number, number, number], bend: [...pose.thumb.bend] as [number, number], twist: pose.thumb.twist } };
   const report: GripFitReport = { changed: 0, palmPush: 0, fingers: [] };
   let hand = handMatrix(fitted);
   const lockIndex = o.lockIndex ?? false;
@@ -242,38 +259,103 @@ export function fitHandPose(pose: HandPose, soup: Soup, side: 1 | -1, o: GripFit
   });
   // 3. thumb: the metacarpal direction is authored; if it stabs into the weapon, rotate it the least that clears
   //    (about the finger axis, towards the back of the hand), then bend the two phalanges onto the surface
-  {
+  if (o.fitThumb !== false) {
     const from = [...fitted.thumb.bend];
     const d0 = [...fitted.thumb.dir] as [number, number, number];
     // the whole thumb straight (bending only moves it towards the palm, i.e. into the weapon the palm presses on)
     const metaClear = (dir: [number, number, number]) => { let w = Infinity; for (let j = 0; j < 3; j++) w = Math.min(w, phalanxClearance(soup, hand, fitted.fingers, { dir, bend: [0, 0] }, side, BONES.thumb(j), THUMB.len[j], THUMB.r[j])); return w; };
-    if (metaClear(d0) < 0) {
-      // the thumb sweeps in two directions at its base joint: across the palm (about the finger axis, z) and away from
-      // it (about x). Search both, least total rotation that clears.
-      const turn = (az: number, ax: number): [number, number, number] => {
-        const q = quat.multiply(quat.create(), quat.setAxisAngle(quat.create(), [0, 0, 1], (az * Math.PI) / 180), quat.setAxisAngle(quat.create(), [1, 0, 0], (ax * Math.PI) / 180));
-        const d = vec3.transformQuat(vec3.create(), d0, q);
-        return [d[0], d[1], d[2]];
-      };
-      let best = { pen: -metaClear(d0) * 1000, az: 0, ax: 0 };
-      for (let az = -60; az <= 60; az += 5) for (let ax = -30; ax <= 30; ax += 5) {
-        if (!az && !ax) continue;
-        const pen = Math.max(0, -metaClear(turn(az, ax))) * 1000 + (Math.abs(az) + Math.abs(ax)) * 0.03;
-        if (pen < best.pen) best = { pen, az, ax };
+    // anatomical violation (m) of a straight thumb along `dir`: joints above the bore line, tip on the wrong side
+    const lim = o.thumbLimit;
+    const tipW = vec3.create(), tipH = vec3.create();
+    const anatomy = (dir: [number, number, number], bend: [number, number] = [0, 0]) => {
+      if (!lim) return 0;
+      const fr = handBoneFrames(fitted.fingers, { dir, bend }, side);
+      let v = 0;
+      for (let j = 0; j < 3; j++) {
+        const f = fr[BONES.thumb(j)];
+        vec3.scaleAndAdd(tipH, f.p, vec3.transformQuat(tipW, [0, 0, -1], f.q), THUMB.len[j]);
+        vec3.transformMat4(tipW, tipH, hand);
+        v += Math.max(0, tipW[1] - lim.maxY);
+        if (j === 2 && lim.maxX !== undefined) v += Math.max(0, tipW[0] - lim.maxX);
       }
-      if (best.az || best.ax) {
-        fitted.thumb.dir = turn(best.az, best.ax);
-        report.thumbTurnDeg = best.az + (best.ax ? 0 : 0);
-      }
-    }
-    for (let j = 0; j < 2; j++) {
-      const clear = (v: number) => {
-        const t = { dir: fitted.thumb.dir, bend: fitted.thumb.bend.map((b, k) => (k === j ? v : k > j ? 0 : b)) as [number, number] };
-        let worst = Infinity;
-        for (let jj = j + 1; jj < 3; jj++) worst = Math.min(worst, phalanxClearance(soup, hand, fitted.fingers, t, side, BONES.thumb(jj), THUMB.len[jj], THUMB.r[jj]));
-        return worst;
+      return v;
+    };
+    // the thumb sweeps in two directions at its base joint: across the palm (about the finger axis, z) and away from
+    // it (about x)
+    const turn = (az: number, ax: number): [number, number, number] => {
+      const q = quat.multiply(quat.create(), quat.setAxisAngle(quat.create(), [0, 0, 1], (az * Math.PI) / 180), quat.setAxisAngle(quat.create(), [1, 0, 0], (ax * Math.PI) / 180));
+      const d = vec3.transformQuat(vec3.create(), d0, q);
+      return [d[0], d[1], d[2]];
+    };
+    if (lim) {
+      // firing hand: metacarpal direction, axial twist and both joint bends solved together by pattern search.
+      // Hard: no segment pressing deeper than its soft tissue allows, every joint below the bore, the tip across
+      // the frame. Then: the thumb reaching as far forward along the frame as it can (thumbs-forward), lying low.
+      const overPress = (t: HandPose['thumb']) => { let w = -Infinity; for (let j = 0; j < 3; j++) w = Math.max(w, -phalanxClearance(soup, hand, fitted.fingers, t, side, BONES.thumb(j), THUMB.len[j], THUMB.r[j], 3) - THUMB_SOFT_M[j]); return w; };
+      const frs = handBoneFrames(fitted.fingers, BIND_THUMB, side);
+      // x = [az°, ax°, twist°, bend0, bend1]
+      const thumbOf = (x: number[]): HandPose['thumb'] => ({ dir: turn(x[0], x[1]), bend: [x[3], x[4]], twist: (x[2] * Math.PI) / 180 });
+      const cost = (x: number[]) => {
+        if (x[3] < 0 || x[4] < 0 || x[3] > maxThumb[0] || x[4] > maxThumb[1]) return Infinity;
+        const t = thumbOf(x);
+        handBoneFrames(fitted.fingers, t, side, frs);
+        let anat = 0, low = 0;
+        for (let j = 0; j < 3; j++) {
+          const f = frs[BONES.thumb(j)];
+          vec3.scaleAndAdd(tipH, f.p, vec3.transformQuat(tipW, [0, 0, -1], f.q), THUMB.len[j]);
+          vec3.transformMat4(tipW, tipH, hand);
+          anat += Math.max(0, tipW[1] - lim.maxY);
+          if (j > 0) low += Math.abs(tipW[1] - (lim.maxY - 0.012));
+          if (j === 2 && lim.maxX !== undefined) anat += Math.max(0, tipW[0] - lim.maxX);
+        }
+        const soft = tipW[2] * 1000 + low * 300;
+        if (anat > 0) return 1e9 + anat * 1e6 + soft;
+        const pen = Math.max(0, overPress(t));
+        return pen > 0 ? 1e6 + pen * 1e6 + soft : soft;
       };
-      fitted.thumb.bend[j] = largestClear(clear, 0, Math.min(maxThumb[j], from[j] + 0.4), gap);
+      let best = { c: Infinity, x: [0, 0, 0, from[0], from[1]] };
+      for (const seed of THUMB_SEEDS) {
+        let x = [seed[0], seed[1], seed[2], 0.3, 0.2], c = cost(x);
+        const step = [30, 30, 45, 0.4, 0.4];
+        for (let it = 0; it < 400 && step[0] > 1.5; it++) {
+          let moved = false;
+          for (let k = 0; k < 5; k++) for (const sgn of [1, -1]) {
+            const y = [...x]; y[k] += sgn * step[k];
+            const cy = cost(y);
+            if (cy < c) { x = y; c = cy; moved = true; }
+          }
+          if (!moved) for (let k = 0; k < 5; k++) step[k] *= 0.5;
+        }
+        if (c < best.c) best = { c, x };
+      }
+      if (best.c < 1e6) {
+        const t = thumbOf(best.x);
+        fitted.thumb.dir = t.dir; fitted.thumb.bend = t.bend; fitted.thumb.twist = t.twist;
+        report.thumbTurnDeg = Math.round(best.x[0]);
+      }
+    } else {
+      if (metaClear(d0) < 0) {
+        // least total rotation that clears
+        let best = { pen: -metaClear(d0) * 1000, az: 0, ax: 0 };
+        for (let az = -60; az <= 60; az += 5) for (let ax = -30; ax <= 30; ax += 5) {
+          if (!az && !ax) continue;
+          const pen = Math.max(0, -metaClear(turn(az, ax))) * 1000 + (Math.abs(az) + Math.abs(ax)) * 0.03;
+          if (pen < best.pen) best = { pen, az, ax };
+        }
+        if (best.az || best.ax) {
+          fitted.thumb.dir = turn(best.az, best.ax);
+          report.thumbTurnDeg = best.az;
+        }
+      }
+      for (let j = 0; j < 2; j++) {
+        const clear = (v: number) => {
+          const t = { dir: fitted.thumb.dir, bend: fitted.thumb.bend.map((b, k) => (k === j ? v : k > j ? 0 : b)) as [number, number] };
+          let worst = Infinity;
+          for (let jj = j + 1; jj < 3; jj++) worst = Math.min(worst, phalanxClearance(soup, hand, fitted.fingers, t, side, BONES.thumb(jj), THUMB.len[jj], THUMB.r[jj]));
+          return worst;
+        };
+        fitted.thumb.bend[j] = largestClear(clear, 0, Math.min(maxThumb[j], from[j] + 0.4), gap);
+      }
     }
     if (from.some((b, k) => Math.abs(b - fitted.thumb.bend[k]) > 1e-3)) { report.changed++; report.fingers.push({ finger: 4, from, to: [...fitted.thumb.bend] }); }
   }
@@ -289,9 +371,11 @@ export function fitWeaponGrips(grips: WeaponGrips, model: FirearmModel, o: GripF
   const soup = soupFromModel(model);
   if (!soup) return { grips, reports: {} };
   const reports: Record<string, GripFitReport> = {};
-  const fit = (name: string, pose: HandPose | undefined, side: 1 | -1, lockIndex: boolean) => {
+  // firing hand: thumb under the bore line, tip across on the left of the frame (thumbs-forward / AR grip)
+  const firingThumb = o.thumbLimit ?? { maxY: model.muzzle[1] - 0.002, maxX: 0.004 };
+  const fit = (name: string, pose: HandPose | undefined, side: 1 | -1, lockIndex: boolean, fitThumb = true) => {
     if (!pose) return pose;
-    const r = fitHandPose(pose, soup, side, { ...o, lockIndex });
+    const r = fitHandPose(pose, soup, side, { ...o, lockIndex, fitThumb, thumbLimit: side === 1 ? firingThumb : undefined });
     reports[name] = r.report;
     return r.pose;
   };
@@ -303,7 +387,7 @@ export function fitWeaponGrips(grips: WeaponGrips, model: FirearmModel, o: GripF
   };
   if (grips.indexPressed) {
     // the trigger finger pressed: fitted on the (already placed) right hand so the pad lands on the trigger shoe
-    const pressed = fit('indexPressed', { ...out.right, fingers: [grips.indexPressed, out.right.fingers[1], out.right.fingers[2], out.right.fingers[3]] }, 1, false)!;
+    const pressed = fit('indexPressed', { ...out.right, fingers: [grips.indexPressed, out.right.fingers[1], out.right.fingers[2], out.right.fingers[3]] }, 1, false, false)!;
     out.indexPressed = pressed.fingers[0];
   }
   for (const k of Object.keys(grips) as (keyof WeaponGrips)[]) {
@@ -353,6 +437,14 @@ export function debugHandClearance(pose: HandPose, model: FirearmModel, side: 1 
     const pts: number[] = [];
     for (let i = 0; i <= 2; i++) { vec3.scaleAndAdd(p, f.p, dir, FINGERS[0].len[j] * (0.3 + 0.7 * (i / 2))); vec3.transformMat4(w, p, hand); pts.push(...Array.from(w).map((v) => Math.round(v * 1e4) / 1e4)); }
     out[`f0${j}_pos`] = pts;
+  }
+  // thumb phalanx tips in weapon space
+  for (let j = 0; j < 3; j++) {
+    const f = frames[BONES.thumb(j)];
+    const dir = vec3.transformQuat(vec3.create(), [0, 0, -1], f.q);
+    vec3.scaleAndAdd(p, f.p, dir, THUMB.len[j]);
+    vec3.transformMat4(w, p, hand);
+    out[`t${j}_pos`] = Array.from(w).map((v) => Math.round(v * 1e4) / 1e4);
   }
   out.wristW = Array.from(wr).map((v) => Math.round(v * 1e4) / 1e4);
   out.middleKnuckleW = Array.from(k0).map((v) => Math.round(v * 1e4) / 1e4);
