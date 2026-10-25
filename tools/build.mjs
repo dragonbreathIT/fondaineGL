@@ -64,9 +64,8 @@ function copyStatic() {
   // compiled wasm (from tools/build-wasm.mjs)
   const wasm = join(root, 'wasm');
   if (existsSync(wasm)) cpSync(wasm, join(dist, 'wasm'), { recursive: true });
-  // downloaded scanned assets (tools/fetch-assets.mjs) — served next to the examples
-  const assets = join(root, 'assets');
-  if (existsSync(assets)) cpSync(assets, join(dist, 'assets'), { recursive: true });
+  // downloaded assets (tools/fetch-assets.mjs, fetch-sounds.mjs) are served from <repo>/assets by tools/serve.mjs;
+  // copying gigabytes of scans into dist on every build is no longer needed
   const logo = join(root, 'logo');
   if (existsSync(logo)) cpSync(logo, join(dist, 'logo'), { recursive: true });
   const index = join(root, 'index.html');
