@@ -9,3 +9,4 @@ export * from './build';
 export * from './compact-pistol';
 export * from './carbine';
 export * from './from-gltf';
+export * from './scanned';

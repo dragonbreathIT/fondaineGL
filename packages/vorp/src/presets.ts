@@ -174,7 +174,7 @@ export const MECH = {
   magRelease: {
     sample: 'mech.magRelease',
     noise: { levelSpl: 62, attackMs: 0.15, decayMs: 22, hpHz: 1800, lpHz: 9500, thumpHz: 420, thumpDb: -10, thumpMs: 7, resonance: 1.3 },
-    ring: { brightness: 1.4, level: 0.2, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
+    ring: { brightness: 1.4, level: 0.1, hits: [{ timeMs: 0, amp: 0.25, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Empty magazine slides out of the well (polymer on aluminium). */
   magOut: {
@@ -185,7 +185,7 @@ export const MECH = {
   magDropConcrete: {
     sample: 'mech.magDropConcrete',
     noise: { levelSpl: 86, attackMs: 0.08, decayMs: 60, hpHz: 220, lpHz: 7500, thumpHz: 150, thumpDb: 3, thumpMs: 38, grainsPerS: 500, grainDb: -10, resonance: 1.1, hit2Ms: 48, hit2Db: -9 },
-    ring: { brightness: 0.55, level: 0.3, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
+    ring: { brightness: 0.55, level: 0.15, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.25, noiseDb: -6 }] },
   },
   /** Magazine landing on dirt / grass: dull thud, no bounce. */
   magDropDirt: {
@@ -196,49 +196,49 @@ export const MECH = {
   magSeat: {
     sample: 'mech.magSeat',
     noise: { levelSpl: 68, attackMs: 0.1, decayMs: 34, hpHz: 650, lpHz: 8500, thumpHz: 230, thumpDb: -3, thumpMs: 22, resonance: 1.0, hit2Ms: 35, hit2Db: -2 },
-    ring: { brightness: 1.15, level: 0.22, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
+    ring: { brightness: 1.15, level: 0.11, hits: [{ timeMs: 0, amp: 0.6, contactMs: 0.08, noiseDb: -6 }, { timeMs: 35, amp: 0.5, contactMs: 0.06, noiseDb: -8 }] },
   },
   /** Slide / carrier dragged back along the rails: a rasp with a spring hiss. */
   slideRack: {
     sample: 'mech.slideRack',
     noise: { levelSpl: 62, attackMs: 5, decayMs: 125, hpHz: 750, lpHz: 7800, thumpDb: -40, grainsPerS: 1100, grainDb: -7, resonance: 0.9 },
-    ring: { brightness: 1.25, level: 0.15, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
+    ring: { brightness: 1.25, level: 0.075, hits: [{ timeMs: 0, amp: 0.35, contactMs: 0.05, noiseDb: -10 }] },
   },
   /** Slide / carrier hits its rear stop. */
   slideStop: {
     sample: 'mech.slideStop',
     noise: { levelSpl: 66, attackMs: 0.08, decayMs: 40, hpHz: 480, lpHz: 9500, thumpHz: 270, thumpDb: -2, thumpMs: 18, resonance: 1.0 },
-    ring: { brightness: 1.1, level: 0.19, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
+    ring: { brightness: 1.1, level: 0.095, hits: [{ timeMs: 0, amp: 0.9, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Spring slams the slide / carrier home and chambers a round. */
   slideHome: {
     sample: 'mech.slideHome',
     noise: { levelSpl: 72, attackMs: 0.05, decayMs: 58, hpHz: 280, lpHz: 10500, thumpHz: 175, thumpDb: 2, thumpMs: 30, resonance: 1.0, hit2Ms: 7, hit2Db: -9 },
-    ring: { brightness: 1.0, level: 0.17, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
+    ring: { brightness: 1.0, level: 0.085, hits: [{ timeMs: 0, amp: 1.5, contactMs: 0.09, noiseDb: -3 }] },
   },
   /** AR charging handle: latch click, pull rasp, carrier reaches the rear. */
   chargingHandle: {
     sample: 'mech.chargingHandle',
     noise: { levelSpl: 64, attackMs: 1.5, decayMs: 95, hpHz: 600, lpHz: 7200, thumpDb: -40, grainsPerS: 600, grainDb: -10, resonance: 0.9, hit2Ms: 65, hit2Db: -3 },
-    ring: { brightness: 1.3, level: 0.14, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
+    ring: { brightness: 1.3, level: 0.07, hits: [{ timeMs: 0, amp: 0.3, contactMs: 0.05, noiseDb: -10 }, { timeMs: 65, amp: 0.7, contactMs: 0.07, noiseDb: -6 }] },
   },
   /** Bolt catch / slide stop slapped: a small, hard, bright click. */
   boltCatch: {
     sample: 'mech.boltCatch',
     noise: { levelSpl: 66, attackMs: 0.08, decayMs: 28, hpHz: 950, lpHz: 9500, thumpHz: 320, thumpDb: -8, thumpMs: 12, resonance: 1.2 },
-    ring: { brightness: 1.35, level: 0.15, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
+    ring: { brightness: 1.35, level: 0.075, hits: [{ timeMs: 0, amp: 0.4, contactMs: 0.04, noiseDb: -8 }] },
   },
   /** Fire-selector detent. */
   selector: {
     sample: 'mech.selector',
     noise: { levelSpl: 60, attackMs: 0.1, decayMs: 20, hpHz: 1500, lpHz: 9000, thumpDb: -40, resonance: 1.2, hit2Ms: 16, hit2Db: 2 },
-    ring: { brightness: 1.75, level: 0.05, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
+    ring: { brightness: 1.75, level: 0.025, hits: [{ timeMs: 0, amp: 0.55, contactMs: 0.035, noiseDb: -8 }, { timeMs: 16, amp: 0.85, contactMs: 0.03, noiseDb: -6 }] },
   },
   /** Hammer falls on an empty chamber. */
   dryFire: {
     sample: 'mech.dryFire',
     noise: { levelSpl: 62, attackMs: 0.05, decayMs: 18, hpHz: 1200, lpHz: 9000, thumpHz: 350, thumpDb: -12, thumpMs: 8, resonance: 1.1 },
-    ring: { brightness: 1.5, level: 0.15, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
+    ring: { brightness: 1.5, level: 0.075, hits: [{ timeMs: 0, amp: 0.2, contactMs: 0.04, noiseDb: -10 }] },
   },
 } satisfies Record<string, MechPreset>;
 

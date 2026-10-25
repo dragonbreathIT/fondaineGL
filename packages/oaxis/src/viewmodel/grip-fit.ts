@@ -32,12 +32,24 @@ export interface GripFitReport { changed: number; /** distance the hand was move
 // ----------------------------------------------------------------------------------------------- triangle soup
 interface Soup { pos: Float32Array; tri: Uint32Array; nrm: Float32Array; grid: Map<number, number[]>; cell: number; min: Vec3 }
 
+function signedVolume(p: ArrayLike<number>, ix: ArrayLike<number>): number {
+  let v = 0;
+  for (let t = 0; t + 2 < ix.length; t += 3) {
+    const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3;
+    v += p[a] * (p[b + 1] * p[c + 2] - p[b + 2] * p[c + 1]) - p[a + 1] * (p[b] * p[c + 2] - p[b + 2] * p[c]) + p[a + 2] * (p[b] * p[c + 1] - p[b + 1] * p[c]);
+  }
+  return v / 6;
+}
+
 function soupFromModel(model: FirearmModel): Soup | null {
   const P: number[] = [], T: number[] = [];
   const tmp = vec3.create();
   for (const part of model.parts) {
     const src = part.object.mesh.source;
     if (!src) continue;
+    // inner surfaces (bores, magwell interiors, hollow grips: inverted winding → negative volume) would make the
+    // closest-facet sign test call open air "inside"; only the outer shells count
+    if (signedVolume(src.positions, src.indices) < 0) continue;
     const base = P.length / 3;
     const n = src.positions.length / 3;
     for (let i = 0; i < n; i++) {
@@ -100,7 +112,7 @@ function closestOnTri(p: Vec3, a: Vec3, b: Vec3, c: Vec3, out: Vec3): Vec3 {
 function signedDistance(s: Soup, p: Vec3, maxR: number): number {
   const cx = Math.floor((p[0] - s.min[0]) / s.cell), cy = Math.floor((p[1] - s.min[1]) / s.cell), cz = Math.floor((p[2] - s.min[2]) / s.cell);
   const R = Math.ceil(maxR / s.cell);
-  let best = Infinity, bestT = -1;
+  let best = Infinity, bestT = -1, bestFacing = Infinity; // bestFacing: closest triangle whose plane faces p
   const q = vec3.create(), a = vec3.create(), b = vec3.create(), c = vec3.create();
   const key = (x: number, y: number, z: number) => ((x & 1023) << 20) | ((y & 1023) << 10) | (z & 1023);
   const seen = new Set<number>();
@@ -117,16 +129,18 @@ function signedDistance(s: Soup, p: Vec3, maxR: number): number {
         closestOnTri(p, a, b, c, q);
         const d = vec3.distance(p, q);
         if (d < best) { best = d; bestT = t; }
+        if (d < bestFacing && (p[0] - s.pos[ia]) * s.nrm[t * 3] + (p[1] - s.pos[ia + 1]) * s.nrm[t * 3 + 1] + (p[2] - s.pos[ia + 2]) * s.nrm[t * 3 + 2] >= 0) bestFacing = d;
       }
     }
     // everything in rings ≤ r has been seen; a closer triangle cannot be further out than (r) cells
     if (bestT >= 0 && best < r * s.cell) break;
   }
   if (bestT < 0) return maxR;
-  const ia = s.tri[bestT * 3] * 3;
-  const dx = p[0] - s.pos[ia], dy = p[1] - s.pos[ia + 1], dz = p[2] - s.pos[ia + 2];
-  const facing = dx * s.nrm[bestT * 3] + dy * s.nrm[bestT * 3 + 1] + dz * s.nrm[bestT * 3 + 2];
-  return facing < 0 ? -best : best;
+  // Sign: inside only when every surface at (about) the closest distance faces away. A facet facing away with a
+  // facing one at nearly the same distance is an edge / a medial-axis point in open air (concave corner, the mouth
+  // of a cavity); and no part of a firearm is thicker than 5 cm, so a "depth" beyond 25 mm is open air as well.
+  if (bestFacing <= best + 0.0015) return bestFacing;
+  return best < 0.025 ? -best : best;
 }
 
 // ----------------------------------------------------------------------------------------------- fitting
@@ -231,7 +245,8 @@ export function fitHandPose(pose: HandPose, soup: Soup, side: 1 | -1, o: GripFit
   {
     const from = [...fitted.thumb.bend];
     const d0 = [...fitted.thumb.dir] as [number, number, number];
-    const metaClear = (dir: [number, number, number]) => phalanxClearance(soup, hand, fitted.fingers, { dir, bend: [0, 0] }, side, BONES.thumb(0), THUMB.len[0], THUMB.r[0]);
+    // the whole thumb straight (bending only moves it towards the palm, i.e. into the weapon the palm presses on)
+    const metaClear = (dir: [number, number, number]) => { let w = Infinity; for (let j = 0; j < 3; j++) w = Math.min(w, phalanxClearance(soup, hand, fitted.fingers, { dir, bend: [0, 0] }, side, BONES.thumb(j), THUMB.len[j], THUMB.r[j])); return w; };
     if (metaClear(d0) < 0) {
       let best = { pen: -metaClear(d0) * 1000, ang: 0 };
       for (let deg = 5; deg <= 60; deg += 5) for (const sgn of [1, -1]) {

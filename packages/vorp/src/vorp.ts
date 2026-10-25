@@ -300,7 +300,7 @@ export abstract class VorpBase {
       samples.push(this.playSample(info, muzzle, peakDb, { ...so, semitones: this.random() * 2 - 1 }));
       const tail = S?.shotTail ? this.samplesFor(S.shotTail) : [];
       if (tail.length) samples.push(this.playSample(this.pickSample(preset.name + '/tail', tail), muzzle, peakDb + (preset.sampleTailDb ?? -8), { ...so, semitones: (this.random() * 2 - 1) * 0.5 }));
-      const bedDb = preset.synthBedDb ?? -9;
+      const bedDb = preset.synthBedDb ?? -16; // chest thump only; the recording carries the report
       if (bedDb > -90) {
         // synth bed: body + sub + compacted spike, no report / precursor, quieter roar
         const bed = { ...vals, peakSpl: vals.peakSpl + bedDb, crackDb: -90, precursorDb: -90, turbDb: (vals.turbDb ?? -6) - 12 };
@@ -335,7 +335,8 @@ export abstract class VorpBase {
     // a loaded recording replaces the noise texture (peak ≈ noise RMS + 10 dB); the receiver ring stays
     const rec = m.sample ? this.sampleAt(m.sample, pos, (m.noise.levelSpl ?? 70) + 10 + (m.sampleDb ?? 0), { bus: BUS.IMPACTS, ...o }) : null;
     const noise = rec ?? this.noise(m.noise, pos, o);
-    const ring = m.ring ? this.modal(receiverModes(m.ring.brightness), m.ring.hits, pos, m.ring.level, o) : null;
+    // the synthetic receiver ring only backs the synthesized texture; a recording already contains its own body
+    const ring = m.ring && !rec ? this.modal(receiverModes(m.ring.brightness), m.ring.hits, pos, m.ring.level, o) : null;
     return { noise, ring, recorded: rec !== null };
   }
 

@@ -5,6 +5,7 @@
 import { Material, Renderer } from '@fondaine/gl';
 import { loadGLTF } from '../gltf/loader';
 import { instantiateGLTF, GLTFInstance } from '../gltf/instantiate';
+import type { WeaponMapping } from '../weapons/from-gltf';
 
 export interface AssetCredit { slot: string; title?: string; author?: string; license: string; url?: string; source?: string }
 
@@ -74,6 +75,20 @@ export class AssetLibrary {
   }
 
   modelEntry(slot: string): ModelEntry | undefined { return this.manifest.models[slot]; }
+
+  /**
+   * Weapon mapping for a slot (see `weaponFromGLTF`): the manifest's `hints.weapon` (written by
+   * `tools/fetch-assets.mjs weapons`) overlaid with `<baseUrl>weapons/<slot>.mapping.json` when that file exists —
+   * the place to pin part regexes, sockets, grips or the orientation of a model the detection gets wrong.
+   */
+  async weaponMapping(slot: string): Promise<WeaponMapping> {
+    const base = (this.manifest.models[slot]?.hints?.weapon as WeaponMapping | undefined) ?? {};
+    try {
+      const r = await fetch(`${this.baseUrl}weapons/${slot}.mapping.json`, { cache: 'no-cache' });
+      if (r.ok) return { ...base, ...((await r.json()) as WeaponMapping) };
+    } catch { /* no override file */ }
+    return base;
+  }
 
   /** PBR material from a scanned texture set (diffuse / normal / packed AO-rough-metal). */
   texture(slot: string, o: { worldUV?: boolean; name?: string; roughness?: number; edgeWear?: number } = {}): Promise<Material | null> {

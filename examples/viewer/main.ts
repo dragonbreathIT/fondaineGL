@@ -1,9 +1,10 @@
 // oAxis model viewer: inspect weapon models (and their animated parts) up close under physically based
 // lighting. URL: ?model=pistol|carbine&yaw=30&pitch=10&dist=0.4&slide=0..1&mag=0..0.2&tex=2048&fov=30
-// Headless capture: &offscreen=1&frames=12
+// Scanned weapon: ?weapon=weapons.pistol (manifest slot) or ?weapon=weapons/test/pistol.glb (file under assets/),
+// with &hands=1&glove=1&eye=1 for the fitted hands. Headless capture: &offscreen=1&frames=12
 
 import { Engine, FirearmModel, mat4, quat, vec3, DEG2RAD, box, Material, RenderObject, Mesh } from '@fondaine/gl';
-import { buildCompactPistol, buildCarbine, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, exportGLB, AssetLibrary, spawnGLTF, fitWeaponGrips, weaponSignedDistance, debugHandClearance, COMPACT_PISTOL_GRIPS, CARBINE_GRIPS } from '@fondaine/oaxis';
+import { buildCompactPistol, buildCarbine, loadScannedWeapon, weaponFromURL, WeaponBuild, ScannedWeapon, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, exportGLB, AssetLibrary, spawnGLTF, fitWeaponGrips, weaponSignedDistance, debugHandClearance, COMPACT_PISTOL_GRIPS, CARBINE_GRIPS } from '@fondaine/oaxis';
 
 declare global { interface Window { __test?: Record<string, unknown> } }
 
@@ -32,7 +33,7 @@ engine.scene.add(tableObj);
 
 // ------------------------------------------------------------------------ models
 status.textContent = 'Building models…';
-const builds = { pistol: buildCompactPistol(engine.renderer), carbine: buildCarbine(engine.renderer) };
+const builds: Record<string, WeaponBuild> = { pistol: buildCompactPistol(engine.renderer), carbine: buildCarbine(engine.renderer) };
 // grips fitted to the geometry like in the game (?fit=0 shows the authored poses)
 const fitReports: Record<string, unknown> = {};
 if (params.get('fit') !== '0') for (const [k, b] of Object.entries(builds)) if (b.grips) { const r = fitWeaponGrips(b.grips, b.model); b.grips = r.grips; fitReports[k] = r.reports; }
@@ -40,14 +41,17 @@ if (params.get('fit') !== '0') for (const [k, b] of Object.entries(builds)) if (
 (window as unknown as Record<string, unknown>).__builds = builds;
 (window as unknown as Record<string, unknown>).__clear = (k: Key, pose: 'right' | 'left', fitted: boolean) => { const g = fitted ? builds[k].grips! : (k === 'pistol' ? COMPACT_PISTOL_GRIPS : CARBINE_GRIPS); return debugHandClearance(g[pose]!, builds[k].model, pose === 'right' ? 1 : -1); };
 (window as unknown as Record<string, unknown>).__sd = (k: Key, p: number[]) => weaponSignedDistance(builds[k].model, p);
-type Key = keyof typeof builds;
-let current: Key = (params.get('model') as Key) in builds ? (params.get('model') as Key) : 'pistol';
+type Key = string;
+let current: Key = (params.get('model') ?? '') in builds ? params.get('model')! : 'pistol';
+const isRifle = (k: Key) => k === 'carbine' || (builds[k] as Partial<ScannedWeapon>).kind === 'carbine';
 const rest = (m: FirearmModel) => {
   // lay the weapon on its left side? No: present it upright, resting on the magazine/grip bottom.
   let minY = 0;
+  const c = vec3.create();
   for (const p of m.parts) {
     const b = p.object.mesh.bounds;
-    if (b) minY = Math.min(minY, b.min[1]);
+    if (!b) continue;
+    for (let k = 0; k < 8; k++) { vec3.transformMat4(c, [k & 1 ? b.max[0] : b.min[0], k & 2 ? b.max[1] : b.min[1], k & 4 ? b.max[2] : b.min[2]], p.local); minY = Math.min(minY, c[1]); }
   }
   return mat4.fromRotationTranslation(mat4.create(), quat.create(), [0, -minY + 0.001, 0]);
 };
@@ -65,6 +69,24 @@ function show(k: Key) {
   for (const b of Object.values(builds)) for (const p of b.model.parts) engine.scene.remove(p.object);
   current = k;
   for (const p of builds[k].model.parts) engine.scene.add(p.object);
+}
+// scanned weapon (?weapon=<manifest slot> or ?weapon=<path.glb under assets/>): oriented, parts/sockets/grips detected,
+// grips fitted like in the game; the procedural spec of its kind supplies the eye relief for ?eye=1
+const weaponParam = params.get('weapon');
+if (weaponParam) {
+  status.textContent = `Loading ${weaponParam}…`;
+  try {
+    const lib = await AssetLibrary.load(engine.renderer, '../../assets/');
+    const w = /\.(glb|gltf)(\?|$)/i.test(weaponParam) ? await weaponFromURL(engine.renderer, lib.baseUrl + weaponParam) : await loadScannedWeapon(engine.renderer, lib, weaponParam);
+    if (w) {
+      for (const warn of w.warnings) console.warn('[viewer] scanned weapon:', warn);
+      if (params.get('fit') !== '0' && w.grips) { const r = fitWeaponGrips(w.grips, w.model); w.grips = r.grips; fitReports.scanned = r.reports; }
+      builds.scanned = w;
+      current = 'scanned';
+      (window as unknown as Record<string, unknown>).__scanned = w;
+      console.info(`[viewer] scanned weapon "${w.title}": ${w.kind}, ${w.model.parts.length} parts, ${w.model.parts.filter((p) => p.bolt).length} slide/bolt, ${w.model.parts.filter((p) => p.magazine).length} magazine, ${w.model.parts.filter((p) => p.trigger).length} trigger`);
+    } else status.textContent = `weapon ${weaponParam} is not in assets/manifest.json`;
+  } catch (e) { status.textContent = `weapon ${weaponParam} failed: ${(e as Error).message}`; console.error(e); }
 }
 show(current);
 
@@ -85,7 +107,7 @@ if (assetSlot) {
 }
 
 // ------------------------------------------------------------------------ orbit camera
-let yaw = num('yaw', 35) * DEG2RAD, pitch = num('pitch', 12) * DEG2RAD, dist = num('dist', current === 'pistol' ? 0.38 : 1.1);
+let yaw = num('yaw', 35) * DEG2RAD, pitch = num('pitch', 12) * DEG2RAD, dist = num('dist', isRifle(current) ? 1.1 : 0.38);
 engine.camera.fovY = num('fov', 30) * DEG2RAD;
 engine.camera.near = 0.01;
 let drag = false;
@@ -112,7 +134,7 @@ engine.onUpdate.push(() => {
   const m = builds[current].model;
   const root = rest(m);
   // centre of the weapon (bounds) as orbit target
-  const target = vec3.create(0, 0.06, current === 'pistol' ? 0 : -0.1);
+  const target = vec3.create(0, 0.06, isRifle(current) ? -0.1 : 0);
   const cp = Math.cos(pitch);
   engine.camera.position.set([target[0] + Math.sin(yaw) * cp * dist, target[1] + Math.sin(pitch) * dist, target[2] + Math.cos(yaw) * cp * dist]);
   quat.fromEuler(engine.camera.rotation, -pitch, yaw, 0);
@@ -123,6 +145,7 @@ engine.onUpdate.push(() => {
     else if (p.magazine && ax) mat4.translate(M, root, [ax[0] * anim.mag, ax[1] * anim.mag, ax[2] * anim.mag]);
     else if (p.trigger) mat4.translate(M, root, [0, 0, (m.triggerTravelM ?? 0) * anim.trigger]);
     else mat4.copy(M, root);
+    mat4.multiply(M, M, p.local); // glTF parts carry their node transform (identity for the procedural models)
   }
   if (arms) {
     const b = builds[current];
