@@ -41,6 +41,8 @@ export interface WeaponMapping {
   nominalLengthM?: number;
   /** Find forward/up from the geometry (principal axes) when `forward`/`up` are not given, and the scale from `kind`. */
   autoOrient?: boolean;
+  /** Turn the model end for end (muzzle ↔ butt) after orientation: the one-word fix when detection picks the wrong end. */
+  reverse?: boolean;
   /** What this is (sets default length, grip templates, charge contract). Inferred from the proportions when absent. */
   kind?: WeaponKind;
   /** Regexes (case-insensitive) matched against node, mesh and material names. */
@@ -148,7 +150,7 @@ function centroids(pos: Float32Array, idx: ArrayLike<number> | null): { c: Float
  * side being the bore axis. Signs: the grip hangs down (short slices at the bottom, the full-length slide/receiver on
  * top) and the muzzle end is the thin one (barrel / slide nose vs grip / stock).
  */
-function principalFrame(c: Float32Array, w: Float32Array): { ex: V3; ey: V3; ez: V3; snapped: boolean } {
+function principalFrame(c: Float32Array, w: Float32Array): { ex: V3; ey: V3; ez: V3; snapped: boolean; why: string } {
   const n = w.length;
   let W = 0; const mean = [0, 0, 0];
   for (let i = 0; i < n; i++) { W += w[i]; mean[0] += c[i * 3] * w[i]; mean[1] += c[i * 3 + 1] * w[i]; mean[2] += c[i * 3 + 2] * w[i]; }
@@ -212,11 +214,26 @@ function principalFrame(c: Float32Array, w: Float32Array): { ex: V3; ey: V3; ez:
   }
   const hang = hn ? hs / hn : (f0 + f1) / 2;
   const toLow = hang - f0, toHigh = f1 - hang; // distance from the hanging mass to each end
-  if (Math.abs(toLow - toHigh) > 0.06 * L) {
-    if (toLow > toHigh) f = [-f[0], -f[1], -f[2]]; // muzzle at the low-f end → f must point there (−z = towards the muzzle = f)
-  } else if (fr1 - fr0 < bk1 - bk0) f = [-f[0], -f[1], -f[2]]; // ambiguous: fall back to the thin end
+  // Decisive first: the last 8 % of the length at the muzzle is barrel / muzzle device / sight post / slide nose, at
+  // the other end it is the stock or the raked grip. Compare the SURFACE AREA in those two slabs (a stock's cross-
+  // section has several times the perimeter of a barrel with a thin post; height alone is fooled by a tall front
+  // sight). Scopes, bipods and rails never reach that far out.
+  let aLowEnd = 0, aHighEnd = 0;
+  for (let i = 0; i < n; i++) {
+    if (fv[i] < f0 + 0.08 * L) aLowEnd += w[i];
+    else if (fv[i] > f1 - 0.08 * L) aHighEnd += w[i];
+  }
+  const hLow = Math.max(1e-12, aLowEnd), hHigh = Math.max(1e-12, aHighEnd), ratio = Math.max(hLow, hHigh) / Math.min(hLow, hHigh);
+  // `muzzleLow`: the muzzle is at the low-f end (then f must point there: −z = towards the muzzle = f)
+  let muzzleLow: boolean, why: string;
+  const pct = (x: number) => `${Math.round((x / L) * 100)}%`;
+  if (ratio >= 1.35) { muzzleLow = hLow < hHigh; why = `the butt end has ${ratio.toFixed(1)}× the surface of the muzzle end`; }
+  else if (Math.abs(toLow - toHigh) > 0.06 * L) { muzzleLow = toLow > toHigh; why = `grip/magazine ${pct(Math.min(toLow, toHigh))} from the rear, ${pct(Math.max(toLow, toHigh))} from the muzzle`; }
+  else { muzzleLow = fr1 - fr0 < bk1 - bk0; why = 'thinner end (weak cue)'; }
+  if (muzzleLow) f = [-f[0], -f[1], -f[2]];
+  why += ` [end surface ratio ${(hHigh / hLow).toFixed(2)}, grip ${pct(toLow)}/${pct(toHigh)}, 20% ends ${((fr1 - fr0) / L).toFixed(2)}/${((bk1 - bk0) / L).toFixed(2)} L]`;
   const ez: V3 = [-f[0], -f[1], -f[2]], ey = u, ex = norm(cross(ey, ez));
-  return { ex, ey, ez, snapped };
+  return { ex, ey, ez, snapped, why };
 }
 
 // ------------------------------------------------------------------------------------------------ analysis
@@ -503,8 +520,9 @@ export function weaponFromGLTF(renderer: Renderer, inst: GLTFInstance, map: Weap
     { let o = 0, p = 0; for (let k = 0; k < cs.length; k++) { C.set(cs[k], o); o += cs[k].length; W.set(ws[k], p); p += ws[k].length; } }
     const fr = principalFrame(C, W);
     ex = fr.ex; ey = fr.ey; ez = fr.ez;
-    guessed.push(`orientation from principal axes (forward ${fmtAxis([-ez[0], -ez[1], -ez[2]])}, up ${fmtAxis(ey)}${fr.snapped ? '' : ', not axis-aligned'})`);
+    guessed.push(`orientation from principal axes (forward ${fmtAxis([-ez[0], -ez[1], -ez[2]])}, up ${fmtAxis(ey)}${fr.snapped ? '' : ', not axis-aligned'}; muzzle end from: ${fr.why})${map.reverse ? ' — reversed by the mapping' : ''}`);
   }
+  if (map.reverse) { ez = [-ez[0], -ez[1], -ez[2]]; ex = norm(cross(ey, ez)); }
   const R = mat4.create();
   R[0] = ex[0]; R[4] = ex[1]; R[8] = ex[2];
   R[1] = ey[0]; R[5] = ey[1]; R[9] = ey[2];
