@@ -37,6 +37,8 @@ export interface WeaponMapping {
   /** Metres per asset unit (default 1), or `lengthM` to fit the overall length. */
   scale?: number;
   lengthM?: number;
+  /** Typical length for the kind, used ONLY when the asset's units can't be recognised (autoOrient). */
+  nominalLengthM?: number;
   /** Find forward/up from the geometry (principal axes) when `forward`/`up` are not given, and the scale from `kind`. */
   autoOrient?: boolean;
   /** What this is (sets default length, grip templates, charge contract). Inferred from the proportions when absent. */
@@ -86,6 +88,8 @@ export interface WeaponAnalysis {
   trigger: V3;
   /** Handguard support-hand spot (rifle) */
   handguard: { z: number; floor: number; halfWidth: number } | null;
+  /** A scope / red dot found on top of a rifle: the sights then sit on its centre line at its ends. */
+  optic: { z0: number; z1: number; railY: number } | null;
   length: number; height: number;
 }
 
@@ -197,7 +201,20 @@ function principalFrame(c: Float32Array, w: Float32Array): { ex: V3; ey: V3; ez:
     if (fv[i] < f0 + 0.2 * L) { fr0 = Math.min(fr0, uv[i]); fr1 = Math.max(fr1, uv[i]); }
     if (fv[i] > f1 - 0.2 * L) { bk0 = Math.min(bk0, uv[i]); bk1 = Math.max(bk1, uv[i]); }
   }
-  if (fr1 - fr0 < bk1 - bk0) f = [-f[0], -f[1], -f[2]]; // the low-f end is the thin one → the muzzle is there → forward = −f
+  // Primary cue: the grip and magazine hang below the bore and sit behind the middle of the gun on every pistol and
+  // rifle, so the muzzle is the end FARTHER from the centroid of the lowest hanging material. (The "thin end" test
+  // alone fails on scoped rifles and anything with a bulky muzzle device or a slim stock.)
+  let hs = 0, hn = 0;
+  const uLow = u0 + 0.22 * (u1 - u0), upIsU = ext(0, 6) <= ext(B - 6, B);
+  for (let i = 0; i < n; i++) {
+    const low = upIsU ? uv[i] < uLow : uv[i] > u1 - 0.22 * (u1 - u0);
+    if (low) { hs += fv[i]; hn++; }
+  }
+  const hang = hn ? hs / hn : (f0 + f1) / 2;
+  const toLow = hang - f0, toHigh = f1 - hang; // distance from the hanging mass to each end
+  if (Math.abs(toLow - toHigh) > 0.06 * L) {
+    if (toLow > toHigh) f = [-f[0], -f[1], -f[2]]; // muzzle at the low-f end → f must point there (−z = towards the muzzle = f)
+  } else if (fr1 - fr0 < bk1 - bk0) f = [-f[0], -f[1], -f[2]]; // ambiguous: fall back to the thin end
   const ez: V3 = [-f[0], -f[1], -f[2]], ey = u, ex = norm(cross(ey, ez));
   return { ex, ey, ez, snapped };
 }
@@ -345,8 +362,37 @@ export function analyzeWeaponGeometry(soups: Soup[], kindHint: WeaponKind | unde
     if (rearmost) { for (let i = b; i >= a; i--) if (top[i] >= m - 0.002) { pick = i; break; } } else { for (let i = a; i <= b; i++) if (top[i] >= m - 0.002) { pick = i; break; } }
     return [bx, by + m, zOf(pick)];
   };
-  const rearSight = rifle ? topIn(zMid - 0.1 * L, max[2] - 0.25 * L, true) : topIn(zMid, max[2], true);
-  const frontSight = topIn(min[2], min[2] + 0.25 * L, false);
+  let rearSight = rifle ? topIn(zMid - 0.1 * L, max[2] - 0.25 * L, true) : topIn(zMid, max[2], true);
+  let frontSight = topIn(min[2], min[2] + 0.25 * L, false);
+  // pistols: the eye lines up the notch, a hair below the top of the rear sight
+  if (!rifle) { rearSight = [rearSight[0], rearSight[1] - 0.0015, rearSight[2]]; frontSight = [frontSight[0], frontSight[1] - 0.001, frontSight[2]]; }
+  // rifles with an optic: the top profile has a raised plateau (scope / red dot) well above the rail line. The eye looks
+  // THROUGH it, so the sight line is the optic's centre, taken at its ends (eyepiece / objective, clear of the turrets).
+  let optic: WeaponAnalysis['optic'] = null;
+  if (rifle) {
+    const tops: number[] = [];
+    for (let i = 0; i < B; i++) if (isFinite(top[i]) && top[i] > 0) tops.push(top[i]);
+    tops.sort((a, b) => a - b);
+    const rail = tops.length ? tops[Math.floor(tops.length * 0.3)] : 0; // the receiver / handguard top line
+    const plateau: number[] = [];
+    for (let i = 0; i < B; i++) if (top[i] - rail > 0.028) plateau.push(i);
+    // keep the longest contiguous run between the magazine and the stock end (not a tall front sight post)
+    let run: [number, number] | null = null, s0 = -1;
+    for (let k = 0; k <= plateau.length; k++) {
+      if (k < plateau.length && (k === 0 || plateau[k] === plateau[k - 1] + 1)) { if (s0 < 0) s0 = plateau[k]; continue; }
+      if (s0 >= 0) { const e = plateau[k - 1]; if (!run || e - s0 > run[1] - run[0]) run = [s0, e]; }
+      s0 = k < plateau.length ? plateau[k] : -1;
+    }
+    if (run && (run[1] - run[0] + 1) * bin > 0.08) {
+      // centre of the bell at that end: its top minus its radius (a bell is round, so its half-width is the radius);
+      // clamped so a wide receiver under a slim optic can't drag the line below the optic
+      const end = (i: number) => top[i] - Math.min(hw[i], 0.6 * (top[i] - rail));
+      const rb = run[1], fb = run[0];
+      rearSight = [bx, by + end(rb), zOf(rb) + bin * 0.5];
+      frontSight = [bx, by + end(fb), zOf(fb) - bin * 0.5];
+      optic = { z0: zOf(fb), z1: zOf(rb), railY: rail };
+    }
+  }
   const pz = trigger[2] - KIND[kind].portBack;
   const ejectionPort: V3 = [bx + Math.max(0.008, hw[binOf(pz)] - 0.003), by + 0.012, pz];
   // rifle support hand: the handguard between the magazine and the front sight
@@ -360,7 +406,7 @@ export function analyzeWeaponGeometry(soups: Soup[], kindHint: WeaponKind | unde
     handguard = { z, floor: isFinite(fl) ? fl : -0.02, halfWidth: w || 0.02 };
   }
   void found.charge;
-  return { kind, min, max, bore: [bx, by], muzzle, rearSight, frontSight, ejectionPort, grip, mag, trigger, handguard, length: L, height: H };
+  return { kind, min, max, bore: [bx, by], muzzle, rearSight, frontSight, ejectionPort, grip, mag, trigger, handguard, optic, length: L, height: H };
 }
 
 // ------------------------------------------------------------------------------------------------ grips
@@ -476,8 +522,19 @@ export function weaponFromGLTF(renderer: Renderer, inst: GLTFInstance, map: Weap
       kind = lenAsset / Math.max(y1 - y0, 1e-6) > 2.2 ? 'carbine' : 'pistol';
       guessed.push(`kind "${kind}" from the proportions`);
     }
-    scale = KIND[kind].lengthM / lenAsset;
-    guessed.push(`scale ${scale.toPrecision(4)} (overall length ${KIND[kind].lengthM} m for a ${kind})`);
+    // keep the real size: try metres, centimetres, millimetres, inches, decimetres and take the first unit that gives a
+    // plausible length for the kind (a scoped, suppressed rifle is longer than a bare carbine and must stay so)
+    const range: [number, number] = kind === 'pistol' ? [0.13, 0.32] : kind === 'carbine' ? [0.6, 1.25] : [0.75, 1.6];
+    const units: [number, string][] = [[1, 'm'], [0.01, 'cm'], [0.001, 'mm'], [0.0254, 'in'], [0.1, 'dm']];
+    const unit = units.find(([u]) => lenAsset * u >= range[0] && lenAsset * u <= range[1]);
+    if (unit) {
+      scale = unit[0];
+      guessed.push(`units ${unit[1]} (overall length ${(lenAsset * scale).toFixed(3)} m)`);
+    } else {
+      const nominal = map.nominalLengthM ?? KIND[kind].lengthM;
+      scale = nominal / lenAsset;
+      guessed.push(`scale ${scale.toPrecision(4)} (units not recognised; fitted to ${nominal} m for a ${kind})`);
+    }
   }
   const RS = mat4.multiply(mat4.create(), R, mat4.fromScaling(mat4.create(), [scale, scale, scale]));
   // ---- engine-space clouds + per-drawable bounds

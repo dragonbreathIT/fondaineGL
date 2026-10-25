@@ -82,10 +82,16 @@ export class AssetLibrary {
    * the place to pin part regexes, sockets, grips or the orientation of a model the detection gets wrong.
    */
   async weaponMapping(slot: string): Promise<WeaponMapping> {
-    const base = (this.manifest.models[slot]?.hints?.weapon as WeaponMapping | undefined) ?? {};
+    // fetch-assets used to write the kind's nominal length as `lengthM`, which forced every scanned gun to 0.85 / 0.19 m
+    // (a scoped, suppressed rifle got shrunk). Those exact defaults on an auto-oriented mapping now mean "fallback only".
+    const legacy = (m: WeaponMapping): WeaponMapping => {
+      if (m.autoOrient && (m.lengthM === 0.85 || m.lengthM === 0.19)) { const { lengthM, ...rest } = m; return { ...rest, nominalLengthM: lengthM }; }
+      return m;
+    };
+    const base = legacy({ ...((this.manifest.models[slot]?.hints?.weapon as WeaponMapping | undefined) ?? {}) });
     try {
       const r = await fetch(`${this.baseUrl}weapons/${slot}.mapping.json`, { cache: 'no-cache' });
-      if (r.ok) return { ...base, ...((await r.json()) as WeaponMapping) };
+      if (r.ok) return legacy({ ...base, ...((await r.json()) as WeaponMapping) });
     } catch { /* no override file */ }
     return base;
   }

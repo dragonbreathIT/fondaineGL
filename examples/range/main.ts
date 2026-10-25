@@ -332,6 +332,11 @@ await setStatus('Zeroing the sights');
 await frame();
 await setStatus('Compiling shaders');
 await frame();
+// draw EVERY weapon once so its materials' pipelines compile and its textures upload now, not on the first switch
+for (const w of weapons) for (const p of w.model.parts) p.object.visible = true;
+engine.step(1 / 60);
+await engine.renderer.dev.device.queue.onSubmittedWorkDone();
+equip(current, true);
 engine.step(1 / 60);
 await engine.renderer.dev.device.queue.onSubmittedWorkDone();
 await setStatus('Ready');

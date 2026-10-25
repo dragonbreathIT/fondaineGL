@@ -248,19 +248,22 @@ export function fitHandPose(pose: HandPose, soup: Soup, side: 1 | -1, o: GripFit
     // the whole thumb straight (bending only moves it towards the palm, i.e. into the weapon the palm presses on)
     const metaClear = (dir: [number, number, number]) => { let w = Infinity; for (let j = 0; j < 3; j++) w = Math.min(w, phalanxClearance(soup, hand, fitted.fingers, { dir, bend: [0, 0] }, side, BONES.thumb(j), THUMB.len[j], THUMB.r[j])); return w; };
     if (metaClear(d0) < 0) {
-      let best = { pen: -metaClear(d0) * 1000, ang: 0 };
-      for (let deg = 5; deg <= 60; deg += 5) for (const sgn of [1, -1]) {
-        const q = quat.setAxisAngle(quat.create(), [0, 0, 1], (sgn * deg * Math.PI) / 180);
+      // the thumb sweeps in two directions at its base joint: across the palm (about the finger axis, z) and away from
+      // it (about x). Search both, least total rotation that clears.
+      const turn = (az: number, ax: number): [number, number, number] => {
+        const q = quat.multiply(quat.create(), quat.setAxisAngle(quat.create(), [0, 0, 1], (az * Math.PI) / 180), quat.setAxisAngle(quat.create(), [1, 0, 0], (ax * Math.PI) / 180));
         const d = vec3.transformQuat(vec3.create(), d0, q);
-        const dir: [number, number, number] = [d[0], d[1], d[2]];
-        const pen = Math.max(0, -metaClear(dir)) * 1000 + deg * 0.03;
-        if (pen < best.pen) best = { pen, ang: sgn * deg };
+        return [d[0], d[1], d[2]];
+      };
+      let best = { pen: -metaClear(d0) * 1000, az: 0, ax: 0 };
+      for (let az = -60; az <= 60; az += 5) for (let ax = -30; ax <= 30; ax += 5) {
+        if (!az && !ax) continue;
+        const pen = Math.max(0, -metaClear(turn(az, ax))) * 1000 + (Math.abs(az) + Math.abs(ax)) * 0.03;
+        if (pen < best.pen) best = { pen, az, ax };
       }
-      if (best.ang) {
-        const q = quat.setAxisAngle(quat.create(), [0, 0, 1], (best.ang * Math.PI) / 180);
-        const d = vec3.transformQuat(vec3.create(), d0, q);
-        fitted.thumb.dir = [d[0], d[1], d[2]];
-        report.thumbTurnDeg = best.ang;
+      if (best.az || best.ax) {
+        fitted.thumb.dir = turn(best.az, best.ax);
+        report.thumbTurnDeg = best.az + (best.ax ? 0 : 0);
       }
     }
     for (let j = 0; j < 2; j++) {

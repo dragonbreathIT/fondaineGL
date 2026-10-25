@@ -21,12 +21,12 @@ export interface GunshotPreset {
   /**
    * Level of the synthesized layer kept under a recorded shot (dB relative to the full synth): the body / sub
    * punch and the compacted blast spike still drive the chest and the hearing model; the recorded report carries
-   * the character. ≤ −90 disables the bed. Default −9.
+   * the character. ≤ −90 disables the bed. Default −16.
    */
   synthBedDb?: number;
   /** Level of the recorded report relative to `peakSpl` (dB). Default 0: the sample's peak sits at `peakSpl`. */
   sampleTrimDb?: number;
-  /** Level of the `shotTail` layer relative to the report (dB). Default −8. */
+  /** Level of the `shotTail` layer relative to the report (dB). Default `Vorp.shotWet.tailDb` (−14). */
   sampleTailDb?: number;
 }
 
@@ -85,14 +85,15 @@ export interface ZonePreset {
 export const ZONES: Record<string, ZonePreset> = {
   outdoorRange: {
     name: 'Outdoor range (open field, berms)',
-    reverb: { rt60Low: 1.6, rt60Mid: 1.1, rt60High: 0.35, xoverLow: 300, xoverHigh: 2500, size: 2.6, diffusion: 0.75, predelayMs: 20, modDepthMs: 0.4, modRateHz: 0.4, levelDb: 0, toneHz: 5000 },
+    // open field: little diffuse field, the character is the discrete slaps off berms and tree lines
+    reverb: { rt60Low: 1.1, rt60Mid: 0.75, rt60High: 0.25, xoverLow: 300, xoverHigh: 2500, size: 2.6, diffusion: 0.7, predelayMs: 20, modDepthMs: 0.4, modRateHz: 0.4, levelDb: -3, toneHz: 4500 },
     criticalDistance: 32,
     ambience: { windSpl: 46, windGust: 0.55, windGustRate: 0.12, windToneHz: 520, rumbleSpl: 36, enable: 1 },
     farReflectors: [
-      { azimuth: 0, distance: 140, reflectivity: 0.35, lowpassHz: 2200 },
-      { azimuth: 75, distance: 230, reflectivity: 0.25, lowpassHz: 1800 },
-      { azimuth: -80, distance: 190, reflectivity: 0.28, lowpassHz: 1800 },
-      { azimuth: 180, distance: 300, reflectivity: 0.2, lowpassHz: 1500 },
+      { azimuth: 0, distance: 140, reflectivity: 0.22, lowpassHz: 2000 },
+      { azimuth: 75, distance: 230, reflectivity: 0.15, lowpassHz: 1600 },
+      { azimuth: -80, distance: 190, reflectivity: 0.17, lowpassHz: 1600 },
+      { azimuth: 180, distance: 300, reflectivity: 0.12, lowpassHz: 1400 },
     ],
   },
   coveredRange: {
@@ -103,9 +104,9 @@ export const ZONES: Record<string, ZonePreset> = {
     criticalDistance: 8,
     ambience: { windSpl: 44, windGust: 0.5, windGustRate: 0.12, windToneHz: 480, rumbleSpl: 36, enable: 1 },
     farReflectors: [
-      { azimuth: 0, distance: 140, reflectivity: 0.35, lowpassHz: 2200 },
-      { azimuth: 75, distance: 230, reflectivity: 0.25, lowpassHz: 1800 },
-      { azimuth: -80, distance: 190, reflectivity: 0.28, lowpassHz: 1800 },
+      { azimuth: 0, distance: 140, reflectivity: 0.22, lowpassHz: 2000 },
+      { azimuth: 75, distance: 230, reflectivity: 0.15, lowpassHz: 1600 },
+      { azimuth: -80, distance: 190, reflectivity: 0.17, lowpassHz: 1600 },
     ],
   },
   indoorRange: {

@@ -147,7 +147,8 @@ export interface FirearmModel {
 export type ReloadPhase = 'magOut' | 'magIn' | 'charge' | 'release' | 'settle';
 
 interface Casing { body: Body; obj: RenderObject; born: number; lastSound: number; settled: boolean }
-interface DroppedMag { body: Body; objs: RenderObject[]; lastSound: number }
+/** `locals[i]` = the part's own transform (glTF node transform incl. unit scale; identity for procedural parts). */
+interface DroppedMag { body: Body; objs: RenderObject[]; locals: Mat4[]; lastSound: number }
 
 export class Firearm extends Behaviour {
   rounds: number;
@@ -903,7 +904,7 @@ export class Firearm extends Behaviour {
       this.engine.scene.add(o);
       return o;
     });
-    const dm: DroppedMag = { body, objs, lastSound: -1 };
+    const dm: DroppedMag = { body, objs, locals: parts.map((p) => p.local), lastSound: -1 };
     this.droppedMags.push(dm);
     this.magByBody.set(body.id, dm);
     this.magDropped = true;
@@ -926,7 +927,8 @@ export class Firearm extends Behaviour {
       this.tq[0] = st[4]; this.tq[1] = st[5]; this.tq[2] = st[6]; this.tq[3] = st[7];
       mat4.fromRotationTranslation(this.tm, this.tq, [st[1], st[2], st[3]]);
       mat4.translate(this.tm, this.tm, [-c[0], -c[1], -c[2]]);
-      for (const o of dm.objs) mat4.copy(o.transform as Mat4, this.tm);
+      // body frame → weapon space at rest → the part's own transform (scanned parts carry node rotation + unit scale)
+      dm.objs.forEach((o, i) => mat4.multiply(o.transform as Mat4, this.tm, dm.locals[i]));
     }
   }
 

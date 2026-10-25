@@ -239,10 +239,14 @@ export class AudioSystem {
     const v = this.vorp;
     if (!v) return null;
     const r = v.gunshot(preset, muzzle, dir, actionPos, extra);
-    const taps = this.computeTaps(muzzle, dir, preset.params.directivityDb ?? 9);
+    // rapid fire ducks the distant slaps along with the reverb send (see `Vorp.shotWet`)
+    const farGain = Math.pow(10, -r.duckDb / 20);
+    const taps = this.computeTaps(muzzle, dir, preset.params.directivityDb ?? 9).map((t) => (t.path > 30 ? { ...t, gain: t.gain * farGain } : t));
     const occ = this.occlusionOf(muzzle);
-    for (const h of r.samples.includes(r.blast) ? r.samples : [r.blast, ...r.samples]) {
-      h.setTaps(taps);
+    // the recorded tail layer (samples[1]) is already the far field, so it gets no image-source taps
+    const report = r.samples.length ? r.samples[0] : r.blast;
+    for (const h of new Set([r.blast, ...r.samples])) {
+      if (h === report || h === r.blast) h.setTaps(taps);
       if (occ) h.setOcclusion(occ.db, occ.lowpass);
     }
     if (r.action && actionPos) r.action.setTaps(this.computeTaps(actionPos, null, 0).slice(0, 4));

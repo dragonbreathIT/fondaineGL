@@ -130,6 +130,16 @@ export abstract class VorpBase {
   };
   /** Default reverb send (dB) derived from the active zone. */
   zoneSendDb = -30;
+  /**
+   * Gunshot wet-path shaping. A field recording already carries its own range reverb, so its send is cut;
+   * the recorded tail layer sits well under the report; shots closer than `burstWindowS` duck the wet path
+   * (send, tail layer, distant slap taps) and fade out the previous shot's recorded echo over `burstChokeMs`,
+   * so full auto does not stack a second of echo per round into a wall; the last round keeps its whole tail.
+   */
+  readonly shotWet = { recordedSendCutDb: 9, tailDb: -14, burstWindowS: 0.25, burstDuckDb: 2, burstDuckMaxDb: 6, burstChokeMs: 160 };
+  private burst: { t: number; n: number; voices: VoiceHandle[] } = { t: -1e9, n: 0, voices: [] };
+  /** Audio clock in seconds (the offline renderer schedules everything from 0 via `delayMs`). */
+  protected clock(): number { return 0; }
   zone: ZonePreset | null = null;
   atmosphere = { tempC: 15, humidity: 0.6, pressureKpa: 101.325 };
   protected cmdb = new CommandBuilder();
@@ -277,7 +287,17 @@ export abstract class VorpBase {
     const vals: Record<string, number> = { ...preset.params, seed: this.seed(), ...extra };
     const minHit = Math.min(0, ...preset.action.hits.map((h) => h.timeMs));
     const lead = -minHit; // mechanical events before ignition (hammer fall) shift the blast later
-    const tailSend = vals.tailSendDb ?? 0;
+    const W = this.shotWet;
+    const now = this.clock();
+    const t = now + (o.delayMs ?? 0) / 1000;
+    const gap = t - this.burst.t;
+    const inBurst = gap >= 0 && gap < W.burstWindowS;
+    // choke only voices already sounding (stop is immediate; a scheduled future shot must not be cut before it plays)
+    if (inBurst && W.burstChokeMs > 0 && this.burst.t <= now) for (const h of this.burst.voices) h.stop(W.burstChokeMs);
+    this.burst.n = inBurst ? this.burst.n + 1 : 0;
+    this.burst.t = t;
+    const duckDb = Math.min(W.burstDuckMaxDb, W.burstDuckDb * this.burst.n);
+    const tailSend = (vals.tailSendDb ?? 0) - duckDb;
     const so: SpawnOptions = {
       ...o, dir, directivityDb: vals.directivityDb, rearLpHz: vals.rearLpHz, delayMs: (o.delayMs ?? 0) + lead,
       reverbSendDb: (o.reverbSendDb ?? this.zoneSendDb) + tailSend,
@@ -297,9 +317,11 @@ export abstract class VorpBase {
     if (pool.length) {
       const info = take = this.pickSample(preset.name, pool);
       const peakDb = vals.peakSpl - (vals.suppRedDb ?? 28) * supp + (vals.firstPopDb ?? 0) * supp + (preset.sampleTrimDb ?? 0) + (this.random() * 2 - 1);
-      samples.push(this.playSample(info, muzzle, peakDb, { ...so, semitones: this.random() * 2 - 1 }));
+      const recSend = (so.reverbSendDb ?? this.zoneSendDb) - W.recordedSendCutDb;
+      samples.push(this.playSample(info, muzzle, peakDb, { ...so, reverbSendDb: recSend, semitones: this.random() * 2 - 1 }));
       const tail = S?.shotTail ? this.samplesFor(S.shotTail) : [];
-      if (tail.length) samples.push(this.playSample(this.pickSample(preset.name + '/tail', tail), muzzle, peakDb + (preset.sampleTailDb ?? -8), { ...so, semitones: (this.random() * 2 - 1) * 0.5 }));
+      // the tail recording is already the far field: no extra reverb on it
+      if (tail.length) samples.push(this.playSample(this.pickSample(preset.name + '/tail', tail), muzzle, peakDb + (preset.sampleTailDb ?? W.tailDb) - duckDb, { ...so, reverbSendDb: -90, semitones: (this.random() * 2 - 1) * 0.5 }));
       const bedDb = preset.synthBedDb ?? -16; // chest thump only; the recording carries the report
       if (bedDb > -90) {
         // synth bed: body + sub + compacted spike, no report / precursor, quieter roar
@@ -314,7 +336,8 @@ export abstract class VorpBase {
       action = this.modal(modes, hits, actionPos, preset.action.level, { ...o, delayMs: o.delayMs ?? 0 });
     }
     /** `blast`: synth voice (full, or the bed under a recording); `samples`: recorded layers (empty = synthesis only); `take`: the recording picked. */
-    return { blast, action, samples, take };
+    this.burst.voices = samples;
+    return { blast, action, samples, take, duckDb };
   }
 
   modal(modes: Mode[], hits: { timeMs: number; amp: number; contactMs: number; noiseDb?: number }[], pos: Vec3Like, level = 1, o: SpawnOptions = {}) {
@@ -415,6 +438,7 @@ export class Vorp extends VorpBase {
 
   /** Browsers start audio suspended until a user gesture. Call from a click/keydown handler. */
   async resume() { if (this.ctx.state !== 'running') await this.ctx.resume(); }
+  protected override clock() { return this.ctx.currentTime; }
 
   protected get engineRate() { return this.ctx.sampleRate; }
   protected uploadSample(id: number, data: Float32Array) {
@@ -500,6 +524,9 @@ interface Exports {
 export class VorpOffline extends VorpBase {
   private ex: Exports;
   readonly sampleRate: number;
+  /** Seconds rendered so far: the offline clock, so chunked renders behave like the realtime host. */
+  private rendered = 0;
+  protected override clock() { return this.rendered; }
 
   private constructor(ex: Exports, sr: number) { super(); this.ex = ex; this.sampleRate = sr; ex.vorp_create(sr); }
 
@@ -539,6 +566,7 @@ export class VorpOffline extends VorpBase {
       left.set(o.subarray(0, 128), b * 128);
       right.set(o.subarray(128, 256), b * 128);
     }
+    this.rendered += (blocks * 128) / this.sampleRate;
     return { left, right };
   }
 

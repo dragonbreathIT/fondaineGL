@@ -144,6 +144,29 @@ for (const sr of [44100, 48000]) {
   const od = d.render(0.8);
   const mechPk = db(peakOf(od.left, od.right, 0, od.left.length));
   check(mechPk <= -10 && mechPk >= -40, `recorded handling stays 10–40 dB under full scale (${mechPk.toFixed(1)} dBFS)`);
+  // full auto, fired live (one render chunk per round): a recording with a long echo must not stack into a wall.
+  // The previous round's echo is choked; the last round keeps its whole tail.
+  const echoTake = (() => { const n = Math.round(2.5 * sr), e = new Float32Array(n); let x = 99; for (let i = 0; i < n; i++) { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; e[i] = ((x / 4294967296) * 2 - 1) * (Math.exp(-i / (0.02 * sr)) + 0.1 * Math.exp(-i / (0.7 * sr))); } let p = 0; for (const v of e) p = Math.max(p, Math.abs(v)); for (let i = 0; i < n; i++) e[i] *= 0.9 / p; return e; })();
+  const live = async (chokeMs: number, rounds = 12) => {
+    const v = await setup();
+    v.setZone(ZONES.outdoorRange);
+    v.setAmbience({ enable: 0 });
+    v.setHearing({ enable: 0 });
+    v.registerSample('shot.echo.01', echoTake, sr);
+    v.shotWet.burstChokeMs = chokeMs;
+    const p: GunshotPreset = { ...GUNSHOTS.rifle556_16in, name: 'echo', synthBedDb: -200, samples: { shot: ['shot.echo'] } };
+    const chunks: Float32Array[] = [];
+    for (let i = 0; i < 12; i++) { if (i >= 12 - rounds) v.gunshot(p, MUZZLE, [0, 0, -1], null, { seed: i }); chunks.push(v.render(0.08).left); }
+    chunks.push(v.render(2).left);
+    const all = new Float32Array(chunks.reduce((n, c) => n + c.length, 0)); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+    const lastShot = 11 * Math.ceil((0.08 * sr) / 128) * 128;
+    const ms = (x: number) => Math.round((x * sr) / 1000);
+    return { late: db(rmsOf(all, all, lastShot + ms(400), lastShot + ms(1400))), lastPk: db(peakOf(all, all, lastShot, lastShot + ms(30))) };
+  };
+  const wall = await live(0), choked = await live(160), single = await live(160, 1);
+  console.log(`echo 0.4–1.4 s after a 12-round burst: unchoked ${wall.late.toFixed(1)} dBFS, choked ${choked.late.toFixed(1)} dBFS, one round alone ${single.late.toFixed(1)} dBFS`);
+  check(Math.abs(choked.late - single.late) < 1.5 && wall.late > choked.late + 1, 'burst echo choke: a burst ends with one round\'s echo, not a stack of them');
+  check(Math.abs(wall.lastPk - choked.lastPk) < 1, 'the last round itself is untouched by the choke');
 }
 
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
