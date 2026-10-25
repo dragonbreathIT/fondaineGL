@@ -149,6 +149,34 @@ for (const [name, b, kind] of builds) {
   check(Math.abs(fy - cy) < 0.006, `scoped carbine: front sight on the scope's centre line (${(fy * 1000).toFixed(0)} mm)`);
   check(m.frontSight[2] < m.rearSight[2], `scoped carbine: front sight ahead of the rear sight`);
 }
+// A precision build with the bipod DEPLOYED: its legs hang lower than the magazine near the front, so "the lowest
+// material is the grip/magazine" points at the wrong end. The butt-vs-muzzle end height must decide. Then the
+// mapping's `reverse` must turn it end for end.
+{
+  const { Mesh, RenderObject, Material, cylinder, box } = await import('@fondaine/gl');
+  const b = buildCarbine(renderer);
+  const add = (g: ReturnType<typeof cylinder>) => b.model.parts.push({ object: new RenderObject(new Mesh(renderer.dev, g.computeTangents(), { keepSource: true }), new Material({ name: 'extra' })), local: mat4.create() as never });
+  const railTop = 0.0307, cy = railTop + 0.035;
+  add(cylinder(0.015, 0.015, 0.3, 32).rotateX(Math.PI / 2).translate(0, cy, 0.02));
+  add(cylinder(0.028, 0.028, 0.07, 32).rotateX(Math.PI / 2).translate(0, cy, -0.15));
+  add(cylinder(0.021, 0.021, 0.05, 32).rotateX(Math.PI / 2).translate(0, cy, 0.17));
+  // bipod: clamp under the handguard front, two legs splayed down to 26 cm below the bore
+  add(box(0.04, 0.03, 0.04).translate(0, -0.035, -0.33));
+  for (const sx of [-1, 1]) add(box(0.014, 0.23, 0.014).rotateZ(sx * 0.25).translate(sx * 0.03, -0.16, -0.33));
+  const bb0 = modelBounds(b.model);
+  check(bb0.min[1] < -0.24, `bipod legs reach below the magazine (lowest point ${(bb0.min[1] * 1000).toFixed(0)} mm)`);
+  const anon = exportVariant(b, false, raw as Float32Array);
+  const w = await roundTrip(anon, 'carbine');
+  const bb = modelBounds(w.model);
+  console.log(`     ${w.warnings.find((x) => x.includes('muzzle end from')) ?? ''}`);
+  check(w.model.muzzle[2] < (bb.min[2] + bb.max[2]) / 2, `bipod rifle: muzzle at the front, muzzle z ${w.model.muzzle[2].toFixed(3)} vs bounds ${bb.min[2].toFixed(3)}…${bb.max[2].toFixed(3)}`);
+  const asset = await parseGLTF(anon.slice(0), '', { decodeImages: false });
+  const rev = weaponFromGLTF(renderer, instantiateGLTF(renderer, asset, { keepSource: true }), { kind: 'carbine', autoOrient: true, reverse: true });
+  const rb = modelBounds(rev.model);
+  // reversed: the stock now points down range, so the thick end is at −z
+  const thickAt = (m: FirearmModel, front: boolean) => { const bd = modelBounds(m); const zc = front ? bd.min[2] + 0.05 : bd.max[2] - 0.05; let lo = Infinity, hi = -Infinity; const t = vec3.create(); for (const p of m.parts) { const s = p.object.mesh.source!; for (let i = 0; i < s.positions.length; i += 3) { vec3.transformMat4(t, [s.positions[i], s.positions[i + 1], s.positions[i + 2]], p.local); if (front ? t[2] < zc : t[2] > zc) { lo = Math.min(lo, t[1]); hi = Math.max(hi, t[1]); } } } return hi - lo; };
+  check(thickAt(rev.model, true) > thickAt(rev.model, false) && Math.abs((rb.max[2] - rb.min[2]) - (bb.max[2] - bb.min[2])) < 0.01, `mapping reverse turns the rifle end for end (front end ${(thickAt(rev.model, true) * 1000).toFixed(0)} mm tall, rear ${(thickAt(rev.model, false) * 1000).toFixed(0)} mm)`);
+}
 if (writeDir) console.log(`wrote glb files to ${writeDir}`);
 if (fail) throw new Error(`${fail} scanned-weapon checks failed`);
 console.log('all scanned-weapon checks passed');
