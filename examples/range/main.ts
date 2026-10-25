@@ -3,7 +3,7 @@
 
 import { Engine, FPSController, Firearm, registerSurfaces, surfaceAlbedoTable, CameraRig, quat, DEG2RAD, vec3 } from '@fondaine/gl';
 import { ZONES, FOOTSTEPS } from '@fondaine/vorp';
-import { buildCarbine, buildCompactPistol, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, ThumbPose, AssetLibrary, blendPose, fitWeaponGrips, fitSupportPose } from '@fondaine/oaxis';
+import { buildCarbine, buildCompactPistol, loadScannedWeapon, WeaponBuild, registerOAxisTuning, OAXIS, FirstPersonArms, SkinnedArms, WeaponGrips, HandPose, ThumbPose, AssetLibrary, blendPose, fitWeaponGrips, fitSupportPose } from '@fondaine/oaxis';
 import { buildRange } from './range';
 
 declare global { interface Window { __test?: Record<string, unknown>; engine?: Engine } }
@@ -100,10 +100,19 @@ registerOAxisTuning(engine.tuning);
 await setStatus('Placing the shooter');
 const player = engine.createEntity('player', range.spawn);
 const ctrl = engine.addScript(player, new FPSController());
-await setStatus('Machining the carbine');
-const carbine = buildCarbine(engine.renderer);
-await setStatus('Machining the C15 Compact');
-const pistol = buildCompactPistol(engine.renderer);
+// scanned weapons (assets slots weapons.carbine / weapons.pistol from `node tools/fetch-assets.mjs weapons`) beat the
+// procedural ones; the glTF is oriented, its parts, sockets and grips found from the geometry (mapping overrides in
+// assets/weapons/<slot>.mapping.json), the matching procedural spec supplies the physics
+await setStatus(assets?.hasModel('weapons.carbine') ? 'Loading the scanned carbine' : 'Machining the carbine');
+const scannedCarbine = await loadScannedWeapon(engine.renderer, assets, 'weapons.carbine').catch((e) => { console.warn('[range] weapons.carbine unusable, using the procedural carbine', e); return null; });
+const carbine: WeaponBuild = scannedCarbine ?? buildCarbine(engine.renderer);
+await setStatus(assets?.hasModel('weapons.pistol') ? 'Loading the scanned pistol' : 'Machining the C15 Compact');
+const scannedPistol = await loadScannedWeapon(engine.renderer, assets, 'weapons.pistol').catch((e) => { console.warn('[range] weapons.pistol unusable, using the procedural pistol', e); return null; });
+const pistol: WeaponBuild = scannedPistol ?? buildCompactPistol(engine.renderer);
+for (const [slot, sw] of [['weapons.carbine', scannedCarbine], ['weapons.pistol', scannedPistol]] as const) {
+  if (sw) { console.info(`[range] ${slot}: scanned "${sw.title}" (${sw.kind}, ${sw.model.parts.length} parts)`); for (const w of sw.warnings) console.warn(`[range] ${slot}: ${w}`); }
+  else console.info(`[range] ${slot}: procedural (no scanned model in assets/manifest.json)`);
+}
 const weapons = [
   engine.addScript(player, new Firearm(carbine.spec, carbine.model, ctrl)),
   engine.addScript(player, new Firearm(pistol.spec, pistol.model, ctrl)),

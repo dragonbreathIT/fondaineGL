@@ -6,6 +6,9 @@
 //   node tools/fetch-assets.mjs polyhaven <id> --slot <slot> [--type model|texture] [--res 2k|4k] [--tris 60000]
 //   node tools/fetch-assets.mjs sketchfab search "<query>" [--license by|cc0] [--max 24]
 //   node tools/fetch-assets.mjs sketchfab get <uid> --slot weapons.pistol      (needs SKETCHFAB_TOKEN)
+//   node tools/fetch-assets.mjs weapons [--pistol <uid>] [--carbine <uid>] [--only pistol|carbine] [--list]
+//                                                    curated CC0/CC-BY weapon set → slots weapons.carbine, weapons.pistol
+//                                                    (without SKETCHFAB_TOKEN: prints what it would fetch and exits 0)
 //   node tools/fetch-assets.mjs convert <file.fbx|.obj> --slot arms             (FBX → glTF via fbx2gltf)
 //   node tools/fetch-assets.mjs local <file.gltf|.glb> --slot <slot> [--tris N] (import your own file)
 //   node tools/fetch-assets.mjs credits                                         (assets/CREDITS.md)
@@ -168,8 +171,12 @@ function nodeMatrix(n) {
 }
 const mul = (a, b) => { const o = new Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3]; return o; };
 
-/** Bake every mesh primitive into world space and merge by material → [{material, pos, nrm, uv, idx}]. */
-function flatten(g) {
+/**
+ * Bake every mesh primitive into world space → [{material, name, pos, nrm, uv, idx}], merged by material (props,
+ * vegetation) or kept one primitive per node (`perNode`: weapons — the slide, magazine, trigger … must stay separate
+ * meshes with their node names so the engine can animate them).
+ */
+function flatten(g, perNode = false) {
   const { json, accessor } = g;
   const byMat = new Map();
   const visit = (ni, parent) => {
@@ -182,8 +189,8 @@ function flatten(g) {
         const N = p.attributes.NORMAL !== undefined ? accessor(p.attributes.NORMAL) : null;
         const U = p.attributes.TEXCOORD_0 !== undefined ? accessor(p.attributes.TEXCOORD_0) : null;
         const I = p.indices !== undefined ? accessor(p.indices).data : Float64Array.from({ length: P.data.length / 3 }, (_, i) => i);
-        const key = p.material ?? -1;
-        const t = byMat.get(key) ?? { material: key, pos: [], nrm: [], uv: [], idx: [] };
+        const key = perNode ? `${ni}|${p.material ?? -1}|${byMat.size}` : (p.material ?? -1);
+        const t = byMat.get(key) ?? { material: p.material ?? -1, name: node.name ?? json.meshes[node.mesh].name, pos: [], nrm: [], uv: [], idx: [] };
         const base = t.pos.length / 3, nv = P.data.length / 3;
         const nm = [M[0], M[1], M[2], M[4], M[5], M[6], M[8], M[9], M[10]];
         for (let v = 0; v < nv; v++) {
@@ -205,7 +212,7 @@ function flatten(g) {
   const I4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const scene = json.scenes?.[json.scene ?? 0];
   for (const ni of scene ? scene.nodes : json.nodes.map((_, i) => i)) visit(ni, I4);
-  return [...byMat.values()].map((t) => ({ material: t.material, pos: Float32Array.from(t.pos), nrm: Float32Array.from(t.nrm), uv: Float32Array.from(t.uv), idx: Uint32Array.from(t.idx) }));
+  return [...byMat.values()].map((t) => ({ material: t.material, name: t.name, pos: Float32Array.from(t.pos), nrm: Float32Array.from(t.nrm), uv: Float32Array.from(t.uv), idx: Uint32Array.from(t.idx) }));
 }
 
 async function decimate(prims, budget) {
@@ -228,7 +235,7 @@ async function decimate(prims, budget) {
     for (const i of idx) if (remap[i] < 0) remap[i] = k++;
     const pos = new Float32Array(k * 3), nrm = new Float32Array(k * 3), uv = new Float32Array(k * 2);
     for (let i = 0; i < nv; i++) if (remap[i] >= 0) { const j = remap[i]; pos.set(p.pos.subarray(i * 3, i * 3 + 3), j * 3); nrm.set(p.nrm.subarray(i * 3, i * 3 + 3), j * 3); uv.set(p.uv.subarray(i * 2, i * 2 + 2), j * 2); }
-    return { material: p.material, pos, nrm, uv, idx: Uint32Array.from(idx, (i) => remap[i]) };
+    return { material: p.material, name: p.name, pos, nrm, uv, idx: Uint32Array.from(idx, (i) => remap[i]) };
   });
 }
 
@@ -254,8 +261,9 @@ function writeGLTF(src, prims, outFile, scale = 1) {
     if (scale !== 1) for (let i = 0; i < p.pos.length; i++) p.pos[i] *= scale;
     const prim = { attributes: { POSITION: add(p.pos, 34962, 'VEC3', 5126, true), NORMAL: add(p.nrm, 34962, 'VEC3', 5126), TEXCOORD_0: add(p.uv, 34962, 'VEC2', 5126) }, indices: add(p.idx, 34963, 'SCALAR', 5125) };
     if (p.material >= 0) prim.material = p.material;
-    meshes.push({ name: `m${meshes.length}`, primitives: [prim] });
-    nodes.push({ name: J.materials?.[p.material]?.name ?? `part${nodes.length}`, mesh: meshes.length - 1 });
+    const name = p.name ?? J.materials?.[p.material]?.name ?? `part${nodes.length}`;
+    meshes.push({ name, primitives: [prim] });
+    nodes.push({ name, mesh: meshes.length - 1 });
   }
   const binName = basename(outFile, extname(outFile)) + '.bin';
   const out = {
@@ -270,7 +278,7 @@ function writeGLTF(src, prims, outFile, scale = 1) {
   return outFile;
 }
 
-async function importModel(file, slot, budget, credit, scale) {
+async function importModel(file, slot, budget, credit, scale, o = {}) {
   const g = readGLTF(file);
   if ((g.json.skins ?? []).length) {
     // rigged characters / arms keep their skeleton: registered as-is (no flattening or decimation)
@@ -280,14 +288,14 @@ async function importModel(file, slot, budget, credit, scale) {
     log(`  ✓ ${slot} ← ${relative(root, file)} (rigged: ${g.json.skins[0].joints.length} bones)`);
     return;
   }
-  const prims = await decimate(flatten(g), budget);
+  const prims = await decimate(flatten(g, !!o.perNode), budget);
   const tris = prims.reduce((a, p) => a + p.idx.length / 3, 0);
   const outFile = join(dirname(file), basename(file, extname(file)) + `.game.gltf`);
   writeGLTF(g, prims, outFile, scale);
   const m = loadManifest();
-  m.models[slot] = { ...credit, file: relative(ASSETS, outFile).replace(/\\/g, '/'), triangles: tris };
+  m.models[slot] = { ...credit, file: relative(ASSETS, outFile).replace(/\\/g, '/'), triangles: tris, ...(o.hints ? { hints: o.hints } : {}) };
   saveManifest(m);
-  log(`  ✓ ${slot} ← ${relative(root, outFile)} (${tris.toLocaleString()} triangles)`);
+  log(`  ✓ ${slot} ← ${relative(root, outFile)} (${tris.toLocaleString()} triangles${o.perNode ? `, ${prims.length} parts` : ''})`);
 }
 
 // ------------------------------------------------------------------------------------------- Poly Haven (CC0)
@@ -327,6 +335,9 @@ function sfAuth() {
   return null;
 }
 const OK_LICENSES = new Set(['cc0', 'by']);
+// the search API returns licences as { uid, label } only; the model endpoint also has a slug
+const LICENSE_LABELS = { 'cc attribution': 'by', 'cc0 public domain': 'cc0', 'cc0': 'cc0', 'cc attribution-sharealike': 'by-sa', 'cc attribution-noncommercial': 'by-nc', 'cc attribution-noderivs': 'by-nd', 'cc attribution-noncommercial-sharealike': 'by-nc-sa', 'cc attribution-noncommercial-noderivs': 'by-nc-nd', 'standard': 'st', 'editorial': 'ed', 'free standard': 'free-st' };
+const licenseSlug = (l) => { if (!l) return '?'; if (l.slug) return String(l.slug).toLowerCase(); const label = String(l.label ?? l).toLowerCase().trim(); return LICENSE_LABELS[label] ?? label; };
 
 async function sketchfabSearch(q) {
   const lic = flag('license');
@@ -336,18 +347,18 @@ async function sketchfabSearch(q) {
   const rows = (res.results ?? []).slice(0, max);
   if (!rows.length) { log('no downloadable results'); return; }
   for (const r of rows) {
-    const license = r.license?.slug ?? r.license?.label ?? '?';
-    const ok = OK_LICENSES.has(String(license).toLowerCase()) ? '✓' : '✗';
-    console.log(`${ok} ${r.uid}  ${String(license).padEnd(6)} ${String(r.faceCount ?? '?').padStart(8)} tris  ${r.name}  — ${r.user?.displayName ?? r.user?.username ?? ''}`);
+    const license = licenseSlug(r.license);
+    const ok = OK_LICENSES.has(license) ? '✓' : '✗';
+    console.log(`${ok} ${r.uid}  ${license.padEnd(6)} ${String(r.faceCount ?? '?').padStart(8)} tris ${String(r.likeCount ?? 0).padStart(5)} ♥  ${r.name}  — ${r.user?.displayName ?? r.user?.username ?? ''}`);
   }
   log('get one with: node tools/fetch-assets.mjs sketchfab get <uid> --slot <slot>   (✓ = CC0/CC-BY)');
 }
 
-async function sketchfabGet(uid, slot) {
+async function sketchfabGet(uid, slot, o = {}) {
   const auth = sfAuth();
   if (!auth) throw new Error('set SKETCHFAB_TOKEN (sketchfab.com → Settings → Password & API → API token)');
   const info = await getJSON(`${SF}/models/${uid}`, auth);
-  const slug = String(info.license?.slug ?? info.license?.label ?? '').toLowerCase();
+  const slug = licenseSlug(info.license);
   const allowed = new Set([...OK_LICENSES, ...(flag('allow-license') ? [flag('allow-license')] : [])]);
   if (!allowed.has(slug)) throw new Error(`${info.name}: licence "${slug}" is not CC0/CC-BY (pass --allow-license ${slug} if you have the rights)`);
   const dl = await getJSON(`${SF}/models/${uid}/download`, auth);
@@ -363,8 +374,136 @@ async function sketchfabGet(uid, slot) {
   const main = files.find((f) => /scene\.gltf$/i.test(f)) ?? files.find((f) => /\.(gltf|glb)$/i.test(f));
   if (!main) throw new Error('archive has no .gltf');
   const author = info.user?.displayName ?? info.user?.username ?? 'unknown';
-  await importModel(join(dir, main), slot, Number(flag('tris', 150000)), { title: info.name, author, license: slug === 'by' ? 'CC-BY-4.0' : 'CC0', url: info.viewerUrl ?? `https://sketchfab.com/3d-models/${uid}`, source: 'sketchfab' }, Number(flag('scale', 1)));
+  if (o.maxTex) limitTextures(join(dir, main), o.maxTex);
+  await importModel(join(dir, main), slot, Number(flag('tris', o.tris ?? 150000)), { title: info.name, author, license: slug === 'by' ? 'CC-BY-4.0' : 'CC0', url: info.viewerUrl ?? `https://sketchfab.com/3d-models/${uid}`, source: 'sketchfab', id: uid }, Number(flag('scale', 1)), o);
   if (slug === 'by') log(`  CC-BY: credit "${info.name}" by ${author} (added to assets/CREDITS.md)`);
+  return info;
+}
+
+/** PNG / JPEG pixel size from the header (no image library needed). */
+function imageSize(buf) {
+  if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let p = 2;
+    while (p + 9 < buf.length) {
+      if (buf[p] !== 0xff) { p++; continue; }
+      const m = buf[p + 1];
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { h: buf.readUInt16BE(p + 5), w: buf.readUInt16BE(p + 7) };
+      p += 2 + buf.readUInt16BE(p + 2);
+    }
+  }
+  return null;
+}
+
+/** Textures above `max` px are downscaled in place with ImageMagick when it is on the PATH, otherwise reported. */
+function limitTextures(gltfFile, max) {
+  const J = JSON.parse(readFileSync(gltfFile, 'utf8'));
+  const magick = ['magick', 'convert'].find((c) => spawnSync(c, ['-version'], { stdio: 'ignore' }).status === 0);
+  for (const im of J.images ?? []) {
+    if (!im.uri || im.uri.startsWith('data:')) continue;
+    const f = join(dirname(gltfFile), decodeURIComponent(im.uri));
+    if (!existsSync(f)) continue;
+    const sz = imageSize(readFileSync(f));
+    if (!sz || Math.max(sz.w, sz.h) <= max) continue;
+    if (magick) { spawnSync(magick, [f, '-resize', `${max}x${max}>`, f], { stdio: 'ignore' }); log(`  ↓ ${basename(f)} ${sz.w}×${sz.h} → ≤ ${max}`); }
+    else log(`  ! ${basename(f)} is ${sz.w}×${sz.h} (> ${max}); install ImageMagick to downscale automatically`);
+  }
+}
+
+// ------------------------------------------------------------------------------------------- curated weapons
+// Photoreal guns come from authored / scanned models, not from procedural geometry. This picks the most liked
+// CC0 / CC-BY downloadable Sketchfab model per slot from a few searches, filtered: pistols must not carry a brand
+// or a trademarked model name (the engine's C15 is fictional on purpose — a generic AR-pattern rifle is fine),
+// character / attachment / stylised results and sub-5k-triangle low-poly are skipped. Override with --pistol/--carbine.
+// Each model keeps its node structure (slide, magazine, trigger as separate meshes), textures ≤ 2k, and is only
+// decimated above 300k triangles. `weaponFromGLTF` (oAxis) then finds orientation, parts, sockets and grips.
+const WEAPON_SET = {
+  'weapons.carbine': { kind: 'carbine', lengthM: 0.85, queries: ['AR-15 rifle', 'M4 carbine'], brandFree: false, flag: 'carbine', exclude: ['pistol', 'handgun'] },
+  'weapons.pistol': { kind: 'pistol', lengthM: 0.19, queries: ['9mm pistol polymer', 'compact pistol', 'handgun', 'generic pistol'], brandFree: true, flag: 'pistol', exclude: ['rifle', 'carbine', 'mosin', 'flintlock', 'musket', 'double barrel', 'double-barrel', 'cannon'] },
+};
+/** Brands and trademarked model names that must not appear in a curated pistol title (matched as words, case-insensitive). */
+const BRANDS = [
+  'glock', 'g17', 'g19', 'g26', 'g43', 'g45', 'sig', 'sauer', 'p320', 'p226', 'p229', 'p365', 'p938', 'm17', 'm18', 'h&k', 'hk', 'heckler', 'koch', 'usp', 'vp9', 'vp70', 'vp70m', 'mk23', 'p7', 'p30',
+  'beretta', 'px4', 'm9', 'm9a1', '92fs', 'cz', 'cz75', 'p-07', 'p-09', 'p-10', 'walther', 'ppq', 'pdp', 'p99', 'pp', 'ppk', 'p88', 'smith', 'wesson', 's&w', 'm&p', 'shield', 'colt', '1911', 'm1911', 'fn', 'fnh', 'fnx', 'fns', 'five-seven', 'five seven', '509', '502',
+  'ruger', 'springfield', 'xd', 'xdm', 'hellcat', 'taurus', 'g2c', 'g3', 'kimber', 'canik', 'tp9', 'steyr', 'daniel defense', 'bcm', 'lwrc', 'noveske', 'norinco', 'qsz', 'polymer80', 'p80', 'pfc9', 'pf940', 'shadow systems', 'mr920', 'keltec', 'kel-tec', 'pr57', 'pr 57',
+  'makarov', 'pm', 'tokarev', 'tt-33', 'browning', 'hi-point', 'detonics', 'wilson', 'staccato', 'iwi', 'jericho', 'masada', 'arex', 'grand power', 'stoeger', 'girsan', 'tisas', 'sar', 'zastava', 'bersa', 'ingram', 'mac-10', 'mac-11', 'mac 10', 'mac 11', 'uzi', 'fort-17', 'fort 17', 'fort',
+  'desert eagle', 'deagle', 'imi', 'magnum research', 'luger', 'p08', 'mauser', 'c96', 'nambu', 'webley', 'enfield', 'stechkin', 'aps', 'grach', 'mp-443', 'yarygin', 'lebedev', 'gsh-18', 'type 54', 'type-64', 'type 64', 'qsz-92', 'px-4', 'nano', 'apx', 'm1934', 'px', 'xm177', 'resident evil', 'samurai edge',
+];
+/** Results that are not a weapon model (characters, attachments, stylised / sci-fi, low-poly). */
+const NOT_A_WEAPON = ['operator', 'soldier', 'police', 'character', 'animation', 'animations', 'animated', 'rigged', 'scope', 'sight', 'suppressor', 'silencer', 'magazine', 'pmag', 'handguard', 'holster', 'ammo', 'bullet', 'cartridge', 'knife', 'stock', 'rail', 'flashlight', 'laser', 'brake', 'skin', 'texture', 'concept', 'cyberpunk', 'sci-fi', 'scifi', 'sci fi', 'futuristic', 'fantasy', 'steampunk', 'toy', 'nerf', 'water gun', 'airsoft', 'revolver', 'smg', 'submachine', 'shotgun', 'sniper', 'low-poly', 'low poly', 'lowpoly', 'ps1', 'stylized', 'stylised', 'cartoon', 'blade', 'sword', 'cs2', 'csgo', 'cod', 'call of duty', 'black ops', 'battlefield', 'pack', 'frame'];
+/** Whole-word match on a title; a brand followed by a model number counts too (cz100, hk416, g17, p320). */
+const normWords = (x) => x.toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim();
+const wordHit = (title, words) => {
+  const t = ` ${normWords(title)} `, tokens = t.trim().split(' ');
+  return words.find((w) => { const n = normWords(w); return n.includes(' ') ? t.includes(` ${n} `) : tokens.some((tok) => tok === n || (tok.startsWith(n) && /^\d+[a-z]{0,2}$/.test(tok.slice(n.length)))); });
+};
+/** Automatic picks need some detail (photoreal is the point); smaller candidates stay listed for a manual --pistol/--carbine. */
+const MIN_PICK_TRIS = 10000;
+
+async function weaponCandidates(set) {
+  const seen = new Map();
+  for (const q of set.queries) for (const lic of ['by', 'cc0']) {
+    const url = `${SF}/search?type=models&downloadable=true&q=${encodeURIComponent(q)}&count=24&sort_by=-likeCount&license=${lic}`;
+    let res;
+    try { res = await getJSON(url, sfAuth() ?? {}); } catch (e) { log(`  search "${q}" (${lic}) failed: ${e.message}`); continue; }
+    for (const r of res.results ?? []) if (!seen.has(r.uid)) seen.set(r.uid, { ...r, query: q });
+  }
+  const rows = [...seen.values()].map((r) => {
+    const license = licenseSlug(r.license);
+    const title = r.name ?? '';
+    let skip = null;
+    if (!OK_LICENSES.has(license)) skip = `licence ${license}`;
+    else if (!r.isDownloadable && r.isDownloadable !== undefined) skip = 'not downloadable';
+    else if (wordHit(title, NOT_A_WEAPON)) skip = `not a weapon model (${wordHit(title, NOT_A_WEAPON)})`;
+    else if (wordHit(title, set.exclude ?? [])) skip = `not a ${set.kind} (${wordHit(title, set.exclude ?? [])})`;
+    else if (set.brandFree && wordHit(title, BRANDS)) skip = `brand / trademark (${wordHit(title, BRANDS)})`;
+    else if ((r.faceCount ?? 0) < MIN_PICK_TRIS) skip = `under ${MIN_PICK_TRIS / 1000}k triangles (pass --${set.flag} ${r.uid} to use it anyway)`;
+    else if ((r.faceCount ?? 0) > 1500000) skip = 'over 1.5M triangles';
+    return { uid: r.uid, title, author: r.user?.displayName ?? r.user?.username ?? '', license, tris: r.faceCount ?? 0, likes: r.likeCount ?? 0, url: `https://sketchfab.com/3d-models/${r.uid}`, query: r.query, skip };
+  });
+  rows.sort((a, b) => b.likes - a.likes);
+  return rows;
+}
+
+function weaponMappingFile(slot) { return join(ASSETS, 'weapons', `${slot}.mapping.json`); }
+
+async function weapons() {
+  const only = flag('only');
+  const listOnly = args.includes('--list');
+  const auth = sfAuth();
+  if (!auth) log('SKETCHFAB_TOKEN is not set — showing what would be fetched (public search API). Set the token (sketchfab.com → Settings → Password & API) to download.');
+  const picks = [];
+  for (const [slot, set] of Object.entries(WEAPON_SET)) {
+    if (only && !slot.endsWith(only)) continue;
+    log(`${slot}: ${set.queries.map((q) => `"${q}"`).join(', ')} — CC0 / CC-BY, most liked first${set.brandFree ? ', no brand names' : ''}`);
+    const rows = await weaponCandidates(set);
+    const forced = flag(set.flag);
+    const pick = forced ? (rows.find((r) => r.uid === forced) ?? { uid: forced, title: '(not in the search results — fetched as given)', author: '', license: '?', tris: 0, likes: 0, skip: null }) : rows.find((r) => !r.skip);
+    for (const r of rows.slice(0, 40)) {
+      const mark = pick && r.uid === pick.uid ? '→' : r.skip ? ' ' : '✓';
+      console.log(`  ${mark} ${r.uid}  ${r.license.padEnd(4)} ${String(r.tris).padStart(8)} tris ${String(r.likes).padStart(5)} ♥  ${r.title}  — ${r.author}${r.skip ? `   [skipped: ${r.skip}]` : ''}`);
+    }
+    if (!pick) { log(`  ✗ ${slot}: nothing left after filtering — pass --${set.flag} <uid>`); continue; }
+    log(`  → ${slot}: ${pick.title} by ${pick.author} (${pick.license}, ${pick.tris.toLocaleString()} tris) ${pick.url ?? ''}`);
+    picks.push({ slot, set, pick });
+  }
+  if (!auth || listOnly) {
+    if (picks.length) log(`would fetch: ${picks.map((p) => `${p.slot} ← ${p.pick.uid}`).join(', ')}  (SKETCHFAB_TOKEN=… node tools/fetch-assets.mjs weapons${picks.map((p) => ` --${p.set.flag} ${p.pick.uid}`).join('')})`);
+    return;
+  }
+  for (const { slot, set, pick } of picks) {
+    try {
+      const hints = { weapon: { kind: set.kind, autoOrient: true, lengthM: set.lengthM } };
+      await sketchfabGet(pick.uid, slot, { tris: Number(flag('tris', 300000)), perNode: true, hints, maxTex: Number(flag('maxtex', 2048)) });
+      const mf = weaponMappingFile(slot);
+      if (!existsSync(mf)) {
+        mkdirSync(dirname(mf), { recursive: true });
+        writeFileSync(mf, JSON.stringify({ kind: set.kind, autoOrient: true, lengthM: set.lengthM }, null, 2));
+        log(`  mapping overrides: ${relative(root, mf)} (part regexes, sockets, grips, forward/up — see README → Scanned weapons)`);
+      }
+    } catch (e) { log(`  ✗ ${slot}: ${e.message}`); process.exitCode = 1; }
+  }
+  log('done → assets/manifest.json (the range and the viewer use weapons.* automatically; ?weapon=weapons.pistol in the viewer)');
 }
 
 // ------------------------------------------------------------------------------------------- FBX / local
@@ -429,11 +568,12 @@ async function main() {
     if ((flag('type') ?? 'model') === 'texture') await polyhavenTexture(a1, slot, res, flag('tile') ? Number(flag('tile')) : undefined);
     else await polyhavenModel(a1, slot, res, Number(flag('tris', 60000)));
   } else if (cmd === 'sketchfab' && a1 === 'search') await sketchfabSearch(a2 ?? '');
-  else if (cmd === 'sketchfab' && a1 === 'get') await sketchfabGet(a2, flag('slot') ?? `custom.${a2}`);
+  else if (cmd === 'sketchfab' && a1 === 'get') await sketchfabGet(a2, flag('slot') ?? `custom.${a2}`, { perNode: (flag('slot') ?? '').startsWith('weapons.'), maxTex: Number(flag('maxtex', 2048)) });
+  else if (cmd === 'weapons') await weapons();
   else if (cmd === 'convert') await convert(a1, flag('slot') ?? 'arms');
   else if (cmd === 'local') await local(a1, flag('slot') ?? `custom.${basename(a1, extname(a1))}`);
   else if (cmd === 'credits') { writeCredits(loadManifest()); log('wrote assets/CREDITS.md'); }
-  else { console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 20).join('\n')); process.exitCode = 1; }
+  else { console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 23).join('\n')); process.exitCode = 1; }
 }
 
 main().catch((e) => { console.error('[fetch-assets] error:', e.message); process.exitCode = 1; });

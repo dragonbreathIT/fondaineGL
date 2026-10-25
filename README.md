@@ -204,8 +204,9 @@ Everything procedural can be replaced by a real scan, slot by slot. `tools/fetch
 |---|---|
 | `node tools/fetch-assets.mjs` | default CC0 set from Poly Haven (2K textures) |
 | `node tools/fetch-assets.mjs polyhaven <id> --slot <slot> [--type model\|texture] [--res 4k] [--tris 60000]` | any Poly Haven texture/model into a slot |
-| `node tools/fetch-assets.mjs sketchfab search "glock"` | search downloadable Sketchfab models (CC0 / CC-BY only) |
+| `node tools/fetch-assets.mjs sketchfab search "AR-15 rifle" --license by` | search downloadable Sketchfab models (✓ = CC0 / CC-BY) |
 | `node tools/fetch-assets.mjs sketchfab get <uid> --slot <slot>` | download + decimate. Needs `SKETCHFAB_TOKEN` (your API token from sketchfab.com → Settings → Password & API). Other licences are refused unless `--allow-license` |
+| `node tools/fetch-assets.mjs weapons` | the curated weapon set → `weapons.carbine`, `weapons.pistol` (see **Scanned weapons** below) |
 | `node tools/fetch-assets.mjs convert arms.fbx --slot arms` | FBX → glTF via `npx fbx2gltf` (Mixamo characters) |
 | `node tools/fetch-assets.mjs local <file.gltf/.glb> --slot <slot>` | register a model you already have |
 | `node tools/fetch-assets.mjs credits` | rewrite `assets/CREDITS.md` (CC-BY must be credited; the range overlay lists them too) |
@@ -214,11 +215,34 @@ Everything procedural can be replaced by a real scan, slot by slot. `tools/fetch
 
 **Real arms:** download a character from mixamo.com (free Adobe account, FBX, T-pose, no animation), then `convert` it to slot `arms`. `SkinnedArms` drives its Mixamo skeleton with the same grip poses as the procedural hands (two-bone IK, clavicle protraction, finger flexion) and collapses everything except shoulders/arms/hands. Mixamo's licence lets you use characters in your game but not redistribute the raw files, so they are not included.
 
-**Real guns:** load any glTF and map it with `weaponFromGLTF(renderer, inst, { forward: '+x', lengthM: 0.185 })`. Parts are found by node name (`slide`, `magazine`, `trigger`, `selector`), sockets by empties (`muzzle`, `ejection_port`, `rear_sight`, `front_sight`); it warns about anything it had to estimate.
+**Real guns:** see **Scanned weapons** below — any glTF becomes a `FirearmModel` with parts, sockets and grips.
 
 **Scale:** instanced LOD (`InstancedLODSet`) draws thousands of scanned trees in a handful of draw calls; shadows use the coarser levels.
 
 Viewer: `examples/viewer/?asset=<slot>` frames any slot on the table; `?rig=1&hands=1&eye=1&pov=1` shows the rigged arms.
+
+### Scanned weapons
+
+Photoreal guns come from authored or scanned models, not from procedural geometry — the procedural C15 and carbine are the zero-download fallback. The pipeline is an engine feature: a glTF goes in, a `FirearmModel` with animated parts, sockets, a charging contract and fitted hands comes out, and the range picks it up by slot.
+
+| Command | What it does |
+|---|---|
+| `node tools/fetch-assets.mjs weapons` | **without `SKETCHFAB_TOKEN`**: queries the public Sketchfab search ("AR-15 rifle", "M4 carbine" / "9mm pistol polymer", "compact pistol", "handgun", "generic pistol"), keeps CC0 / CC-BY downloadable models, sorts by likes, filters out characters, attachments, stylised and low-poly results, and for the pistol every brand or trademarked model name (Glock, SIG, H&K, Beretta, CZ, Walther, S&W, Colt / 1911, FN, Ruger, Springfield, Taurus, Kimber, Canik, Steyr, Daniel Defense, BCM, LWRC, Noveske, Makarov, … — the list is in the script); prints the ranked candidates with uid, licence, triangles and likes, marks the pick (→) and exits 0. **With the token**: downloads the picks, keeps the node structure (slide / magazine / trigger stay separate meshes), keeps textures up to 2k (larger ones are downscaled when ImageMagick is on the PATH), decimates only above 300k triangles (`--tris`), registers `weapons.carbine` / `weapons.pistol` with their mapping hints and credits them in `assets/CREDITS.md` |
+| `… weapons --pistol <uid> --carbine <uid>` | pick other candidates (anything CC0 / CC-BY; the pistol must stay unbranded) |
+| `… weapons --only pistol` / `--list` | one slot / list without downloading even with a token |
+| `… sketchfab get <uid> --slot weapons.pistol` | a single model into a weapon slot (same per-node import) |
+| `… local my-gun.glb --slot weapons.pistol` | your own model |
+
+**Licence rules:** only CC0 and CC-BY are accepted (read from Sketchfab's licence field at download time); CC-BY requires the attribution in `assets/CREDITS.md`, which the range overlay also shows. No branded or trademarked pistol designs in the curated set — a generic AR-pattern rifle is fine, the pistol must be a generic or fictional polymer pistol. Nothing under `assets/` is committed.
+
+**What the engine does with the model** (`weaponFromGLTF(renderer, inst, mapping)` in oAxis, used by `loadScannedWeapon(renderer, assets, slot)`):
+
+* **Orientation and scale** — `autoOrient: true` finds the frame from the geometry: the thin axis is the width, in the plane across it the rotation with the smallest bounding rectangle gives the bore axis, the grip hanging down fixes "up", the thin muzzle end fixes "forward"; the scale comes from the `kind` (pistol ≈ 0.19 m, carbine ≈ 0.85 m, or `lengthM` / `scale`). The bore is put on x = y = 0 and the trigger at the reference z of the procedural model of the same kind, so the specs' hip offset and eye relief fit unchanged.
+* **Parts** — by name first (regexes for `slide|bolt|carrier`, `magazine`, `trigger`, `selector|safety`, `charging handle`), then by geometry for anything unnamed: the long mesh riding above the bore is the slide (pistol), the tall mesh hanging under the bore the magazine, the small mesh inside the trigger guard the trigger, the flat mesh on the rear of the receiver the charging handle (rifle). The `warnings` list every guess.
+* **Sockets** — empties named `muzzle` / `ejection_port` / `rear_sight` / `front_sight` win; otherwise muzzle = foremost point on the bore line, sights = topmost points of the front / rear quarter, ejection port = right side above the chamber. `magAxis` comes from the magazine's long axis, `magBox` from its bounds, the rifle's `charge` grip from the charging handle (pistols rack the slide).
+* **Grips** — `deriveWeaponGrips`: the pistol grip is the column hanging below the bore behind the trigger; its rake comes from the back strap, the firing hand's knuckles sit just behind the front strap, the support hand goes on the handguard (rifle) or wraps over the firing hand (pistol), another pose goes under the magazine. Finger curls are then solved against the actual triangles by `fitWeaponGrips`.
+
+**Overrides:** `assets/weapons/<slot>.mapping.json` (written as a template by `weapons`, merged over the manifest's `hints.weapon`) is a `WeaponMapping`: `forward` / `up` / `scale` / `lengthM` instead of auto-orientation, regexes per part (`"slide": "Slide|Upper"`), `sockets` in weapon space (`"muzzle": [0, 0, -0.11]`), `magAxis`, `magBox`, `triggerTravelM`, `chargeContract`, `casing`, and `grips` (authored `WeaponGrips`, skips the derivation). The viewer shows the result: `examples/viewer/?weapon=weapons.pistol&hands=1&glove=1&eye=1` (a file under `assets/` works too: `?weapon=weapons/test/pistol.glb`), and `node tools/run-ts.mjs packages/oaxis/test/weapons-gltf.test.ts --write assets/weapons/test` exports the procedural guns as glTF test files for exactly that.
 
 ### Recorded sounds
 
